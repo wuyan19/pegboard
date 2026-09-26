@@ -62,7 +62,7 @@ hex = "0.4.3"
 ulid = "1.1.3"
 
 # ---- CLI ----
-clap = { version = "4.6.1", default-features = false }
+clap = { version = "4.6.1", default-features = false, features = ["std"] }
 
 # ---- 日志 ----
 tracing = "0.1.44"

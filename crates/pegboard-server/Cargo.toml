@@ -1,6 +1,29 @@
 [package]
 name = "pegboard-server"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
+pegboard-core = { path = "../pegboard-core" }
+pegboard-sdk = { path = "../pegboard-sdk" }
+axum = { workspace = true, features = ["macros", "ws", "multipart"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-util"] }
+tokio-util = { workspace = true, features = ["io"] }
+tower = { workspace = true }
+tower-http = { workspace = true, features = ["set-header", "trace", "limit"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+bytes = { workspace = true }
+mime_guess = { workspace = true }
+percent-encoding = { workspace = true }
+futures-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

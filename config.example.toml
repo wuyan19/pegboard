@@ -16,3 +16,4 @@ sign_ttl_max = 86400
 
 [storage]
 data_root = "./data"
+apps_dir = "./apps"

@@ -1,6 +1,24 @@
 [package]
 name = "pegboard-cli"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "pegboard"
+path = "src/main.rs"
 
 [dependencies]
+pegboard-core = { path = "../pegboard-core" }
+pegboard-server = { path = "../pegboard-server" }
+clap = { workspace = true, features = ["derive", "env"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal"] }
+axum = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+reqwest = { workspace = true, features = ["rustls", "json"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

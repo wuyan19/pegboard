@@ -1,14 +1,3 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+//! pegboard-server：HTTP 接入、路由、静态托管、管理页。
+//!
+//! 依赖 pegboard-core；协议转换只在 ingress。

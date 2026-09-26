@@ -98,7 +98,7 @@ declare global {
 ### fetch
 - 语义对齐原生 `fetch`：`method`、`headers`、`body`、`signal`、流式响应。
 - 目标必须命中 `permissions.net`，否则 `TARGET_DENIED`。
-- 不自动携带目标站 cookie；如需凭证，应用自行在 `headers` 中处理。
+- 不携带任何环境 cookie（宿主出站剥离 `Cookie`）；凭证用 `Authorization` 或自定义头传递，`Cookie` 为浏览器禁设头不可用。
 - 响应为宿主清理后的同源响应。
 
 ### connectWS

@@ -31,8 +31,10 @@
     "shim": true
   },
   "limits": {
-    "store_bytes": 10485760,
+    "kv_value_bytes": 262144,
+    "kv_total_bytes": 10485760,
     "file_bytes": 104857600,
+    "file_total_bytes": 1073741824,
     "net_rps": 20
   }
 }
@@ -42,7 +44,7 @@
 - `entry`：入口文件，相对应用根目录。
 - `permissions.net` / `ws`：目标 origin 或完整 URL 白名单；为空表示禁止。
 - `permissions.shim`：是否启用全局 fetch 兜底，默认 `true`。
-- `limits`：缺省时使用宿主默认值。
+- `limits`：键名与宿主配置一致（见数据模型 §8），缺省用宿主默认值，只能收紧；`sign_ttl_max` 不可覆盖。
 
 ## 3. 静态托管
 
@@ -53,6 +55,7 @@ GET /apps/:app_id/*
 - 命中文件则直出，正确 MIME。
 - 未命中且非文件路径时回退到 `entry`（SPA）。
 - 支持 Range、ETag、Cache-Control。
+- 对 text/html 响应注入 `/sdk.js`（见 §7）。
 - 不经过 guard，不携带 subject。
 
 ## 4. Store API
@@ -71,6 +74,8 @@ POST   /api/store/kv/batch       body: { "ops": [{ "op", "key", "value" }] }
 - `value`：任意 JSON。
 - `op`：`set` | `delete`。
 - 命名空间由应用自行约定，宿主不解释。
+- `key` 需 URL 编码后置于路径；含 `/` 时编码为 `%2F`，服务端不得将其解码为路径分隔符。
+- `list` 一次返回全部命中项，不做分页；规模受 `kv_total_bytes` 约束。
 
 ### 4.2 文件
 
@@ -93,7 +98,7 @@ POST   /api/files/:id/sign       body: { "ttl": 600 }
 ## 5. Proxy API
 
 ```
-ANY /api/proxy?url=<encoded>     HTTP 代理，透传 method/headers/body
+ANY /api/proxy?url=<encoded>     HTTP 代理，透传 method/body 与应用请求头
 GET /api/ws-proxy?url=<encoded>  WebSocket 升级
 GET /api/asset?url=<encoded>     资源代理，用于 img/font/css
 ```
@@ -102,23 +107,33 @@ GET /api/asset?url=<encoded>     资源代理，用于 img/font/css
 - `url` 必须命中 `manifest.permissions.net`（asset 同）。
 - 每跳重定向重新校验白名单。
 - 默认拒绝内网、本机、云元数据地址；本机仅按 app + 端口显式放行。
+- 请求头处理（对齐原生 fetch：默认不携带环境 cookie）：
+
+  | 处理 | 头 |
+  |---|---|
+  | 出站剥离 | `Cookie`、`Host`、`X-Forwarded-*`、身份注入头（与 identity 配置同清单） |
+  | 照常透传 | 其余全部，含应用显式设置的 `Authorization`；`Origin` / `Referer` 为应用页面真实来源，保留 |
+
+  proxy、asset、ws-proxy 升级握手共用本表。
 - 响应头清理：移除 `Set-Cookie`、`Access-Control-*`、`Content-Security-Policy`；保留 `Content-Type`、`Content-Length`、`ETag`。
 - 流式响应（SSE、chunked）透传，不缓冲。
 - 二进制安全。
 
 ## 6. 错误码
 
-| code | 含义 |
-|---|---|
-| `APP_NOT_FOUND` | 应用不存在 |
-| `PERMISSION_DENIED` | 未声明该权限 |
-| `TARGET_DENIED` | 目标不在白名单或命中 SSRF 规则 |
-| `LIMIT_EXCEEDED` | 超出限额 |
-| `NOT_FOUND` | 资源不存在 |
-| `INVALID_REQUEST` | 参数或请求体非法 |
-| `TOKEN_INVALID` | 签名 token 无效或过期 |
-| `UPSTREAM_ERROR` | 目标服务错误 |
-| `TIMEOUT` | 超时 |
+| code | HTTP | 含义 |
+|---|---|---|
+| `APP_NOT_FOUND` | 404 | 应用不存在 |
+| `PERMISSION_DENIED` | 403 | 未声明该权限 |
+| `TARGET_DENIED` | 403 | 目标不在白名单或命中 SSRF 规则 |
+| `LIMIT_EXCEEDED` | 413 / 429 | 超出限额（字节类 413，频率类 429） |
+| `NOT_FOUND` | 404 | 资源不存在 |
+| `INVALID_REQUEST` | 400 | 参数或请求体非法 |
+| `TOKEN_INVALID` | 401 | 签名 token 无效或过期 |
+| `UPSTREAM_ERROR` | 502 | 目标服务错误 |
+| `TIMEOUT` | 504 | 超时 |
+
+- v1 身份为固定值模式，不产生 401；401 仅在启用 token 身份来源且凭证缺失或无效时出现。
 
 ## 7. 注入前端 SDK
 
@@ -161,6 +176,8 @@ interface Host {
 ```
 GET  /api/admin/apps
 GET  /api/admin/apps/:id
+POST /api/admin/apps/:id/install     触发扫描并注册（清单校验通过）
+POST /api/admin/apps/:id/uninstall   注销应用，删除数据目录与签名 token，产物保留
 POST /api/admin/apps/:id/enable
 POST /api/admin/apps/:id/disable
 GET  /api/admin/logs?app=&since=&limit=
