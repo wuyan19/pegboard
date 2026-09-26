@@ -191,7 +191,8 @@ GET  /api/admin/logs?app=&action=&outcome=&since=&until=&limit=&cursor=
 - 应用视图含 `state`（enabled | disabled）与 `enabled`；详情另附 `root`（产物目录）与 `data_dir`（数据目录）。
 - `GET /api/admin/apps/:id` 详情在应用视图外附 `usage` 实际用量：`{ "kv": { "bytes", "keys" }, "files": { "bytes", "count" } }`；未使用过的应用为 0。
 - `logs` 双向分页：条目含 `seq`（进程内单调序号）；`next`/`prev` 为 `"ts:seq"` 游标（更早/更新），分别经 `before`/`after` 参数传回续页，`null` 表示到底；两者不可同时使用。每页条数 `limit` 上限 1000。
-- 是否鉴权由部署配置决定。
+- 是否鉴权由部署配置决定：设置环境变量 `PEGBOARD_ADMIN_TOKEN`（≥16 字符）即对全部管理 API 启用 Bearer 鉴权，未携带或错误返回 401 `TOKEN_INVALID`；未设置时不鉴权（v1 本地模式）。
+- 应用包安装约束：zip 解压后总量 ≤ 256 MiB、条目 ≤ 10000、压缩体 ≤ 100 MiB；包路径经 zip-slip 防护；应用 id 取自包内 manifest.json 且与既有目录/注册表冲突时拒绝。
 
 ## 9. 版本与兼容
 
