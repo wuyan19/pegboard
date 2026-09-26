@@ -41,20 +41,15 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
     let rows = host_db
         .app_states()
         .map_err(|e| format!("读取 host.db 应用状态失败: {e}"))?;
-    let legacy_upgrade = host_db
-        .has_only_legacy_rows()
-        .map_err(|e| format!("读取 host.db 应用状态失败: {e}"))?;
     let mut registry = AppRegistry::default();
     let mut disabled: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if rows.is_empty() || legacy_upgrade {
+    if rows.is_empty() {
         let outcome = AppRegistry::scan(&config.storage.apps_dir, &config.limits)
             .map_err(|e| format!("扫描 apps 目录失败: {e}"))?;
         for warning in &outcome.warnings {
             tracing::error!(error = %warning, "app invalid (skipped)");
         }
-        // 保留既有行的启停状态（如旧版禁用过的应用），其余注册为启用
         for meta in outcome.registry.list() {
-            let enabled = rows.get(&meta.id).map_or(true, |(e, _)| *e);
             host_db
                 .upsert_app(
                     &meta.id,
@@ -63,13 +58,7 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
                     &meta.manifest_json(),
                 )
                 .map_err(|e| format!("seed 写入 host.db 失败: {e}"))?;
-            host_db
-                .set_enabled(&meta.id, enabled)
-                .map_err(|e| format!("seed 写入 host.db 失败: {e}"))?;
-            if !enabled {
-                disabled.insert(meta.id.clone());
-            }
-            tracing::info!(app_id = %meta.id, "seed 安装");
+            tracing::info!(app_id = %meta.id, "首次启动 seed 安装");
         }
         registry = outcome.registry;
     } else {

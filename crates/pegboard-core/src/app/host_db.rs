@@ -152,22 +152,6 @@ impl HostDb {
         Ok(out)
     }
 
-    /// 是否全部为历史遗留的空清单行（manifest == "{}"，旧版启停操作写入）。
-    /// 空表视为 true——用于升级迁移：此类库可安全地 seed 重装 apps/ 下全部应用。
-    pub fn has_only_legacy_rows(&self) -> Result<bool, HostDbError> {
-        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
-        let total: i64 = conn.query_row("SELECT COUNT(*) FROM apps", [], |r| r.get(0))?;
-        if total == 0 {
-            return Ok(true);
-        }
-        let odd: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM apps WHERE manifest <> ?1",
-            [b"{}" as &[u8]],
-            |r| r.get(0),
-        )?;
-        Ok(odd == 0)
-    }
-
     /// 设置启用状态（幂等）。
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), HostDbError> {
         let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
@@ -230,17 +214,6 @@ mod tests {
         assert_eq!(db.delete_app_tokens("a").unwrap(), 1);
         assert!(db.lookup_token("t1").unwrap().is_none());
         assert!(db.lookup_token("t2").unwrap().is_some());
-    }
-
-    #[test]
-    fn legacy_rows_detection() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = HostDb::open(&dir.path().join("host.db")).unwrap();
-        assert!(db.has_only_legacy_rows().unwrap(), "空表视为 legacy");
-        db.upsert_app("a", "A", "/x", b"{}").unwrap();
-        assert!(db.has_only_legacy_rows().unwrap());
-        db.upsert_app("b", "B", "/y", br#"{"id":"b"}"#).unwrap();
-        assert!(!db.has_only_legacy_rows().unwrap(), "含真实清单即非 legacy");
     }
 
     #[test]
