@@ -35,6 +35,9 @@ pub enum Outcome {
 pub struct AuditEvent {
     /// Unix 毫秒
     pub ts: i64,
+    /// 进程内单调序号（record 时分配）；旧日志行无序号按 0。游标分页用。
+    #[serde(default)]
+    pub seq: u64,
     pub app_id: Option<String>,
     /// 不透明 subject，可为空
     pub subject: Option<String>,
@@ -56,6 +59,8 @@ pub struct Filter {
     pub outcome: Option<Outcome>,
     pub since: Option<i64>,
     pub until: Option<i64>,
+    /// 游标 (ts, seq)：返回严格更早（ts 更小，或相同 ts 中 seq 更小）的事件
+    pub cursor: Option<(i64, u64)>,
     /// 默认 200，上限 1000
     pub limit: Option<u32>,
 }
@@ -87,6 +92,12 @@ impl Filter {
         }
         if self.until.is_some_and(|u| e.ts > u) {
             return false;
+        }
+        if let Some((cursor_ts, cursor_seq)) = self.cursor {
+            // 倒序分页：只取严格早于游标的事件
+            if !(e.ts < cursor_ts || (e.ts == cursor_ts && e.seq < cursor_seq)) {
+                return false;
+            }
         }
         true
     }
@@ -134,6 +145,7 @@ impl Default for AuditConfig {
 /// tx 锁仅短持有（取克隆），不跨 await。
 struct AuditorShared {
     tx: std::sync::Mutex<Option<mpsc::SyncSender<AuditEvent>>>,
+    next_seq: AtomicU64,
     dropped: AtomicU64,
     config: AuditConfig,
 }
@@ -147,10 +159,12 @@ impl AuditorShared {
     }
 
     /// 非阻塞投递。队列满时丢弃本条并计数，不阻塞请求路径。
-    fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
+    /// 序号在投递时分配：与入队顺序一致，作为倒序分页的次级排序键。
+    fn record(&self, mut event: AuditEvent) -> Result<(), AuditError> {
         let Some(tx) = self.sender() else {
             return Err(AuditError::ChannelClosed);
         };
+        event.seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         match tx.try_send(event) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Full(_)) => {
@@ -207,6 +221,7 @@ impl Auditor {
         Ok(Self {
             shared: Arc::new(AuditorShared {
                 tx: std::sync::Mutex::new(Some(tx)),
+                next_seq: AtomicU64::new(0),
                 dropped: AtomicU64::new(0),
                 config: config.clone(),
             }),
@@ -340,7 +355,7 @@ fn query_files(config: &AuditConfig, filter: &Filter) -> Result<Vec<AuditEvent>,
         }
     }
     // 文件序列新 → 旧，文件内时间升序；整体按 ts 降序（稳定排序保留新文件优先）
-    out.sort_by(|a, b| b.ts.cmp(&a.ts));
+    out.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.seq.cmp(&a.seq)));
     out.truncate(limit);
     Ok(out)
 }
@@ -383,6 +398,7 @@ mod tests {
     fn ev(app: &str, action: ActionKind, outcome: Outcome) -> AuditEvent {
         AuditEvent {
             ts: 0,
+            seq: 0,
             app_id: Some(app.into()),
             subject: Some("u".into()),
             action,
@@ -564,6 +580,69 @@ mod tests {
         e.target = Some("x".repeat(10_000));
         let s = encode(&e).unwrap();
         assert!(s.len() <= MAX_LINE_BYTES);
+    }
+
+    #[test]
+    fn seq_assigned_on_record_and_cursor_pages() {
+        let d = TempDir::new().unwrap();
+        let a = Auditor::start(cfg(&d)).unwrap();
+        // 10 条同毫秒事件：seq 是唯一稳定次序键
+        for i in 0..10 {
+            let mut e = ev("a", ActionKind::Net, Outcome::Ok);
+            e.ts = 5_000;
+            e.target = Some(format!("t{i}"));
+            a.record(e).unwrap();
+        }
+        a.shutdown().unwrap();
+
+        let a2 = Auditor::start(cfg(&d)).unwrap();
+        // 第一页：最新 3 条（seq 9,8,7）
+        let p1 = a2
+            .query(&Filter {
+                limit: Some(3),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(p1.len(), 3);
+        assert_eq!(p1[0].seq, 9);
+        assert_eq!(p1[2].seq, 7);
+
+        // 以 (ts, seq) 为游标取下一页：严格更早，无重叠
+        let p2 = a2
+            .query(&Filter {
+                cursor: Some((p1[2].ts, p1[2].seq)),
+                limit: Some(3),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(p2.len(), 3);
+        assert_eq!(p2[0].seq, 6);
+        assert_eq!(p2[2].seq, 4);
+
+        let p3 = a2
+            .query(&Filter {
+                cursor: Some((p2[2].ts, p2[2].seq)),
+                limit: Some(3),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(p3.len(), 3);
+        assert_eq!(p3[2].seq, 1);
+
+        // 跨毫秒的游标也正确（ts 主导排序）
+        let mut e = ev("a", ActionKind::Net, Outcome::Ok);
+        e.ts = 4_999;
+        let _ = e;
+        let p4 = a2
+            .query(&Filter {
+                cursor: Some((p3[2].ts, p3[2].seq)),
+                limit: Some(3),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(p4.len(), 1);
+        assert_eq!(p4[0].seq, 0);
+        a2.shutdown().unwrap();
     }
 
     #[test]

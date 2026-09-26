@@ -51,6 +51,7 @@ where
     };
     let event = AuditEvent {
         ts: now_ms(),
+        seq: 0, // record 时由 AuditorShared 分配
         app_id: Some(ctx.app.id.clone()),
         subject: ctx.subject.0.clone(),
         action,

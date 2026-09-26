@@ -43,28 +43,14 @@ struct StatusView {
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<StatusView> {
     let cfg = &state.config;
-    let (mode, identity) = match (&cfg.server.mode, &cfg.identity) {
-        (pegboard_core::config::Mode::Local, _) => ("local", "fixed"),
-        (pegboard_core::config::Mode::Lan, pegboard_core::config::IdentityConfig::Fixed { .. }) => {
-            ("lan", "fixed")
-        }
-        (
-            pegboard_core::config::Mode::Lan,
-            pegboard_core::config::IdentityConfig::Forwarded { .. },
-        ) => ("lan", "forwarded"),
-        (
-            pegboard_core::config::Mode::Lan,
-            pegboard_core::config::IdentityConfig::Tokens { .. },
-        ) => ("lan", "tokens"),
-        // Local 模式搭配 forwarded/tokens 身份来源：模式仍报 local，身份照实报
-        (
-            pegboard_core::config::Mode::Local,
-            pegboard_core::config::IdentityConfig::Forwarded { .. },
-        ) => ("local", "forwarded"),
-        (
-            pegboard_core::config::Mode::Local,
-            pegboard_core::config::IdentityConfig::Tokens { .. },
-        ) => ("local", "tokens"),
+    let mode = match cfg.server.mode {
+        pegboard_core::config::Mode::Local => "local",
+        pegboard_core::config::Mode::Lan => "lan",
+    };
+    let identity = match &cfg.identity {
+        pegboard_core::config::IdentityConfig::Fixed { .. } => "fixed",
+        pegboard_core::config::IdentityConfig::Forwarded { .. } => "forwarded",
+        pegboard_core::config::IdentityConfig::Tokens { .. } => "tokens",
     };
     Json(StatusView {
         version: env!("CARGO_PKG_VERSION"),
@@ -312,6 +298,8 @@ struct LogQuery {
     outcome: Option<String>,
     since: Option<i64>,
     until: Option<i64>,
+    /// 倒序分页游标 "ts:seq"（上一页 next 原样传回）
+    cursor: Option<String>,
     limit: Option<u32>,
 }
 
@@ -355,6 +343,18 @@ async fn list_logs(
                 .ok_or_else(|| ApiError::invalid_request(format!("未知 outcome: {s}")))?,
         ),
     };
+    let cursor = match q.cursor.as_deref() {
+        None => None,
+        Some(raw) => {
+            let (ts, seq) = raw
+                .split_once(':')
+                .and_then(|(t, s)| Some((t.parse::<i64>().ok()?, s.parse::<u64>().ok()?)))
+                .ok_or_else(|| {
+                    ApiError::invalid_request(format!("游标非法: {raw}（须为 ts:seq）"))
+                })?;
+            Some((ts, seq))
+        }
+    };
     let filter = Filter {
         app_id: q.app.clone(),
         subject: q.subject.clone(),
@@ -362,6 +362,7 @@ async fn list_logs(
         outcome,
         since: q.since,
         until: q.until,
+        cursor,
         limit: q.limit.map(|l| l.min(1000)),
     };
     let events = state
@@ -373,6 +374,7 @@ async fn list_logs(
         .map(|e| {
             json!({
                 "ts": e.ts,
+                "seq": e.seq,
                 "app_id": e.app_id,
                 "subject": e.subject,
                 "action": format!("{:?}", e.action),
@@ -383,9 +385,16 @@ async fn list_logs(
             })
         })
         .collect();
+    // 满页才可能有下一页；游标取最后一项的 (ts, seq)
+    let effective_limit = q.limit.map(|l| l.min(1000)).unwrap_or(200) as usize;
+    let next = if events.len() == effective_limit && effective_limit > 0 {
+        events.last().map(|e| format!("{}:{}", e.ts, e.seq))
+    } else {
+        None
+    };
     Ok((
         StatusCode::OK,
-        Json(json!({ "items": items, "next": null })),
+        Json(json!({ "items": items, "next": next })),
     )
         .into_response())
 }

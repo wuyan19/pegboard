@@ -71,6 +71,7 @@
   <select id="f-limit" title="条数上限">
     <option>100</option><option>500</option><option>1000</option>
   </select>
+  <button id="more" hidden>加载更早</button>
 </div>
 <table id="logs">
   <thead><tr><th>时间</th><th>应用</th><th>subject</th><th>动作</th><th>目标</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead>
@@ -269,7 +270,33 @@ async function toggleUsage(button, id) {
 
 const OUTCOME_CLASS = { Ok: "ok", Denied: "warn", Error: "err" };
 
-async function loadLogs() {
+// 日志状态：accumulated 为倒序累积条目；游标变化（过滤/刷新）即重置
+let logItems = [];
+let logNext = null;
+
+function renderLogs() {
+  const tbody = $("logs-body");
+  tbody.innerHTML = "";
+  if (!logItems.length) {
+    setBody("#logs-body", '<tr><td colspan="8" class="muted">暂无事件（过滤条件或时间范围内没有能力调用）</td></tr>');
+    return;
+  }
+  for (const e of logItems) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      '<td class="muted" title="' + esc(new Date(e.ts).toLocaleString()) + '">' + esc(relTime(e.ts)) + "</td>" +
+      "<td><code>" + esc(e.app_id || "-") + "</code></td>" +
+      "<td>" + esc(e.subject || "-") + "</td>" +
+      "<td>" + esc(e.action) + "</td>" +
+      '<td class="mono">' + esc(e.target || "-") + "</td>" +
+      '<td><span class="pill ' + (OUTCOME_CLASS[e.outcome] || "") + '">' + esc(e.outcome) + "</span></td>" +
+      '<td class="mono">' + esc(e.error_code || "-") + "</td>" +
+      "<td>" + esc(e.duration_ms) + " ms</td>";
+    tbody.appendChild(tr);
+  }
+}
+
+async function loadLogs(loadMore) {
   if (logsInFlight) return;
   logsInFlight = true;
   try {
@@ -278,36 +305,34 @@ async function loadLogs() {
     if ($("f-action").value) q.set("action", $("f-action").value);
     if ($("f-outcome").value) q.set("outcome", $("f-outcome").value);
     q.set("limit", $("f-limit").value);
+    if (loadMore && logNext) q.set("cursor", logNext);
     const page = await j("/api/admin/logs?" + q.toString());
     const items = page.items || [];
-    const tbody = $("logs-body");
-    tbody.innerHTML = "";
-    if (!items.length) {
-      setBody("#logs-body", '<tr><td colspan="8" class="muted">暂无事件（过滤条件或时间范围内没有能力调用）</td></tr>');
-    }
-    for (const e of items) {
-      const tr = document.createElement("tr");
-      tr.innerHTML =
-        '<td class="muted" title="' + esc(new Date(e.ts).toLocaleString()) + '">' + esc(relTime(e.ts)) + "</td>" +
-        "<td><code>" + esc(e.app_id || "-") + "</code></td>" +
-        "<td>" + esc(e.subject || "-") + "</td>" +
-        "<td>" + esc(e.action) + "</td>" +
-        '<td class="mono">' + esc(e.target || "-") + "</td>" +
-        '<td><span class="pill ' + (OUTCOME_CLASS[e.outcome] || "") + '">' + esc(e.outcome) + "</span></td>" +
-        '<td class="mono">' + esc(e.error_code || "-") + "</td>" +
-        "<td>" + esc(e.duration_ms) + " ms</td>";
-      tbody.appendChild(tr);
-    }
+    logItems = loadMore ? logItems.concat(items) : items;
+    logNext = page.next || null;
+    renderLogs();
+    $("more").hidden = !logNext;
+    $("more").disabled = false;
+    $("more").textContent = "加载更早";
   } catch (e) {
     setBody("#logs-body", "");
-    $("logs-body").appendChild(errorRow(8, e, loadLogs));
+    $("logs-body").appendChild(errorRow(8, e, () => loadLogs(loadMore)));
   } finally {
     logsInFlight = false;
   }
 }
 
+$("more").addEventListener("click", () => {
+  $("more").disabled = true;
+  $("more").textContent = "加载中…";
+  loadLogs(true);
+});
+
 for (const id of ["f-app", "f-action", "f-outcome", "f-limit"]) {
-  $(id).addEventListener("change", loadLogs);
+  $(id).addEventListener("change", () => {
+    logNext = null;
+    loadLogs(false);
+  });
 }
 
 // ---------- 刷新 ----------

@@ -36,6 +36,7 @@ fn state_with(manifests: &[(&str, &str)]) -> TestEnv {
     handle
         .record(pegboard_core::audit::AuditEvent {
             ts: 1_000,
+            seq: 0,
             app_id: Some("a".into()),
             subject: Some("u".into()),
             action: pegboard_core::audit::ActionKind::Net,
@@ -48,6 +49,7 @@ fn state_with(manifests: &[(&str, &str)]) -> TestEnv {
     handle
         .record(pegboard_core::audit::AuditEvent {
             ts: 2_000,
+            seq: 0,
             app_id: Some("b".into()),
             subject: None,
             action: pegboard_core::audit::ActionKind::Store,
@@ -377,6 +379,80 @@ async fn status_endpoint() {
     assert!(v["listen"].as_str().is_some_and(|s| s.contains(':')));
     assert!(v["uptime_secs"].is_u64());
     assert_eq!(v["audit_dropped"], 0);
+}
+
+#[tokio::test]
+async fn logs_cursor_pagination_no_overlap() {
+    let env = env();
+    // 造 6 条同 app 事件（ts 各异），limit=2 逐页取
+    let handle = env.state.auditor.clone();
+    for i in 0..6i64 {
+        handle
+            .record(pegboard_core::audit::AuditEvent {
+                ts: 10_000 + i,
+                seq: 0,
+                app_id: Some("paging".into()),
+                subject: None,
+                action: pegboard_core::audit::ActionKind::Net,
+                target: Some(format!("t{i}")),
+                outcome: pegboard_core::audit::Outcome::Ok,
+                error_code: None,
+                duration_ms: 1,
+            })
+            .expect("record");
+    }
+    // 审计写入是后台线程异步落盘：轮询首页直到 2 条可见（2s 上限）
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let r = call(&env, Method::GET, "/api/admin/logs?app=paging&limit=2").await;
+        let v = body_json(r).await;
+        if v["items"].as_array().is_some_and(|a| a.len() == 2) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "审计事件 2s 内未全部落盘"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let mut cursor: Option<String> = None;
+    let mut seen: Vec<(i64, Option<String>)> = Vec::new();
+    for _ in 0..5 {
+        let mut uri = "/api/admin/logs?app=paging&limit=2".to_owned();
+        if let Some(c) = &cursor {
+            uri.push_str(&format!("&cursor={c}"));
+        }
+        let r = call(&env, Method::GET, &uri).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let v = body_json(r).await;
+        let items = v["items"].as_array().expect("items").to_vec();
+        for it in &items {
+            seen.push((
+                it["ts"].as_i64().expect("ts"),
+                it["target"].as_str().map(str::to_owned),
+            ));
+        }
+        match v["next"].as_str() {
+            Some(c) => cursor = Some(c.to_owned()),
+            None => break,
+        }
+    }
+    // 6 条全部取到、无重复、倒序
+    assert_eq!(seen.len(), 6, "{seen:?}");
+    let ts_list: Vec<i64> = seen.iter().map(|(ts, _)| *ts).collect();
+    let mut sorted = ts_list.clone();
+    sorted.sort();
+    sorted.reverse();
+    assert_eq!(ts_list, sorted, "应按时间倒序");
+}
+
+#[tokio::test]
+async fn logs_invalid_cursor_400() {
+    let env = env();
+    let r = call(&env, Method::GET, "/api/admin/logs?cursor=garbage").await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(r).await;
+    assert_eq!(v["error"]["code"], "INVALID_REQUEST");
 }
 
 #[tokio::test]

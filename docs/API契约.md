@@ -189,6 +189,7 @@ GET  /api/admin/logs?app=&action=&outcome=&since=&until=&limit=&cursor=
 - 只操作宿主元数据，不读写应用业务数据。
 - `status` 返回宿主自身状态：version、mode、identity、listen、data_root、apps_dir、uptime_secs、audit_dropped。
 - `GET /api/admin/apps/:id` 详情在应用视图外附 `usage` 实际用量：`{ "kv": { "bytes", "keys" }, "files": { "bytes", "count" } }`；未使用过的应用为 0。
+- `logs` 倒序分页：条目含 `seq`（进程内单调序号）；满页时 `next` 为 `"ts:seq"` 游标，作为 `cursor` 参数传回取更早事件，`null` 表示到底。
 - 是否鉴权由部署配置决定。
 
 ## 9. 版本与兼容
