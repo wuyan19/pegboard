@@ -4,6 +4,7 @@
 //! 单个应用损坏不阻塞整体：错误汇总为 warnings 返回，成功项保留。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 
 use crate::config::Limits;
@@ -106,9 +107,10 @@ pub struct ScanOutcome {
 }
 
 /// 应用注册表：扫描目录、解析清单、按 id 查询。
+/// 内部存 `Arc<AppMeta>`：读锁短持有，克隆后跨 await 使用。
 #[derive(Debug, Default)]
 pub struct AppRegistry {
-    apps: HashMap<String, AppMeta>,
+    apps: HashMap<String, Arc<AppMeta>>,
 }
 
 impl AppRegistry {
@@ -132,7 +134,7 @@ impl AppRegistry {
                             .push(AppError::DuplicateId(meta.id.clone()));
                     } else {
                         ids.push(meta.id.clone());
-                        outcome.registry.apps.insert(meta.id.clone(), meta);
+                        outcome.registry.apps.insert(meta.id.clone(), Arc::new(meta));
                     }
                 }
                 Err(e) => outcome.warnings.push(e),
@@ -142,13 +144,13 @@ impl AppRegistry {
         Ok(outcome)
     }
 
-    pub fn get(&self, id: &str) -> Option<&AppMeta> {
-        self.apps.get(id)
+    pub fn get(&self, id: &str) -> Option<Arc<AppMeta>> {
+        self.apps.get(id).cloned()
     }
 
     /// 按 id 字典序返回。
-    pub fn list(&self) -> Vec<&AppMeta> {
-        let mut metas: Vec<&AppMeta> = self.apps.values().collect();
+    pub fn list(&self) -> Vec<Arc<AppMeta>> {
+        let mut metas: Vec<Arc<AppMeta>> = self.apps.values().cloned().collect();
         metas.sort_by(|a, b| a.id.cmp(&b.id));
         metas
     }
@@ -163,15 +165,15 @@ impl AppRegistry {
         apps_dir: &Path,
         id: &str,
         default_limits: &Limits,
-    ) -> Result<AppMeta, AppError> {
+    ) -> Result<Arc<AppMeta>, AppError> {
         validate_id(id)?;
-        let meta = load_one(apps_dir, id, default_limits)?;
-        self.apps.insert(meta.id.clone(), meta.clone());
+        let meta = Arc::new(load_one(apps_dir, id, default_limits)?);
+        self.apps.insert(meta.id.clone(), Arc::clone(&meta));
         Ok(meta)
     }
 
     /// 卸载：从注册表移除。物理删除由上层决定。
-    pub fn remove(&mut self, id: &str) -> Option<AppMeta> {
+    pub fn remove(&mut self, id: &str) -> Option<Arc<AppMeta>> {
         self.apps.remove(id)
     }
 }
@@ -627,11 +629,11 @@ mod tests {
             );
         }
         let outcome = AppRegistry::scan(dir.path(), &default_limits()).expect("scan");
-        let ids: Vec<&str> = outcome
+        let ids: Vec<String> = outcome
             .registry
             .list()
-            .iter()
-            .map(|m| m.id.as_str())
+            .into_iter()
+            .map(|m| m.id.clone())
             .collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
     }
