@@ -47,6 +47,9 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
     let audit_handle = auditor.handle();
 
     let state = Arc::new(AppState {
+        identity: pegboard_core::identity::Identity::new(&config.identity),
+        guard: Arc::new(pegboard_core::guard::Guard::new()),
+        stores: pegboard_core::store::StoreManager::new(data_root.join("apps_data"), config.limits),
         config: config.clone(),
         apps: RwLock::new(outcome.registry),
         auditor: audit_handle.clone(),

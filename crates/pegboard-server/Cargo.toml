@@ -7,7 +7,7 @@ rust-version.workspace = true
 [dependencies]
 pegboard-core = { path = "../pegboard-core" }
 pegboard-sdk = { path = "../pegboard-sdk" }
-axum = { workspace = true, features = ["macros", "ws", "multipart", "http1", "tokio", "json"] }
+axum = { workspace = true, features = ["macros", "ws", "multipart", "http1", "tokio", "json", "query"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-util"] }
 tokio-util = { workspace = true, features = ["io"] }
 tower = { workspace = true }

@@ -460,14 +460,19 @@ mod tests {
         })
         .expect("auditor")
         .handle();
-        TestEnv {
-            _root: root,
-            state: Arc::new(AppState {
-                config,
-                apps: std::sync::RwLock::new(outcome.registry),
-                auditor,
-            }),
-        }
+        let limits = config.limits;
+        let state = Arc::new(AppState {
+            identity: pegboard_core::identity::Identity::new(&config.identity),
+            guard: Arc::new(pegboard_core::guard::Guard::new()),
+            stores: pegboard_core::store::StoreManager::new(
+                root.path().join("data/apps_data"),
+                limits,
+            ),
+            config,
+            apps: std::sync::RwLock::new(outcome.registry),
+            auditor,
+        });
+        TestEnv { _root: root, state }
     }
 
     async fn get(env: &TestEnv, uri: &str) -> axum::http::Response<Body> {

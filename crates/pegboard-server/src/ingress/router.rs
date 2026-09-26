@@ -1,5 +1,5 @@
 //! 路由装配与全局状态。静态与 SDK 不过 guard、不要求 subject；
-//! 能力 API 在 M3 起经 RequestContext extractor。
+//! 能力 API 经 RequestContext extractor（应用识别 + 身份解析）。
 
 use std::sync::{Arc, RwLock};
 
@@ -7,8 +7,12 @@ use axum::Router;
 use pegboard_core::app::{AppMeta, AppRegistry};
 use pegboard_core::audit::AuditorHandle;
 use pegboard_core::config::Config;
+use pegboard_core::guard::Guard;
+use pegboard_core::identity::Identity;
+use pegboard_core::store::StoreManager;
 
 use crate::ingress::error::ApiError;
+use crate::ingress::store_api;
 use crate::statics;
 
 /// 全进程共享状态。构造一次，注入所有 handler。
@@ -17,6 +21,9 @@ pub struct AppState {
     pub config: Config,
     pub apps: RwLock<AppRegistry>,
     pub auditor: AuditorHandle,
+    pub identity: Identity,
+    pub guard: Arc<Guard>,
+    pub stores: StoreManager,
 }
 
 impl AppState {
@@ -34,6 +41,7 @@ impl AppState {
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(statics::routes())
+        .merge(store_api::routes())
         .fallback(not_found_fallback)
         .with_state(state)
 }

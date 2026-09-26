@@ -502,14 +502,16 @@ mod tests {
 
     #[test]
     fn quota_exceeded_on_total() {
-        let (_d, s) = store();
-        let mut limits = Limits::default();
-        limits.kv_value_bytes = 100;
-        limits.kv_total_bytes = 150;
+        let (_d, _s) = store();
+        let limits = Limits {
+            kv_value_bytes: 100,
+            kv_total_bytes: 150,
+            ..Limits::default()
+        };
         let s = AppStore::open(&_d.path().join("q.db"), "t", limits).unwrap();
-        s.set("a", &vec![0u8; 100]).unwrap();
+        s.set("a", &[0u8; 100]).unwrap();
         assert!(matches!(
-            s.set("b", &vec![0u8; 100]),
+            s.set("b", &[0u8; 100]),
             Err(StoreError::QuotaExceeded { .. })
         ));
     }
@@ -517,8 +519,8 @@ mod tests {
     #[test]
     fn overwrite_uses_delta() {
         let (_d, s) = store();
-        s.set("k", &vec![0u8; 100]).unwrap();
-        s.set("k", &vec![0u8; 50]).unwrap();
+        s.set("k", &[0u8; 100]).unwrap();
+        s.set("k", &[0u8; 50]).unwrap();
         assert_eq!(s.usage().unwrap().bytes, 50);
     }
 
@@ -526,8 +528,10 @@ mod tests {
     fn batch_is_atomic() {
         let (_d, s) = store();
         s.set("k1", b"1").unwrap();
-        let mut limits = Limits::default();
-        limits.kv_value_bytes = 64;
+        let limits = Limits {
+            kv_value_bytes: 64,
+            ..Limits::default()
+        };
         let s = AppStore::open(&_d.path().join("b.db"), "t", limits).unwrap();
         let ops = vec![
             KvOp::Set {
@@ -621,7 +625,7 @@ mod tests {
         let mut tight = l;
         tight.kv_value_bytes = 8;
         assert!(matches!(
-            m.with("a", &tight, |s| s.set("k", &vec![0u8; 16])),
+            m.with("a", &tight, |s| s.set("k", &[0u8; 16])),
             Err(StoreError::ValueTooLarge { .. })
         ));
     }
