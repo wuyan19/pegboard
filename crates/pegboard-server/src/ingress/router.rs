@@ -37,6 +37,8 @@ pub struct AppState {
     pub host_db: Arc<HostDb>,
     /// 进程启动时刻（admin 状态页的 uptime）
     pub started: std::time::Instant,
+    /// 管理鉴权 token（env PEGBOARD_ADMIN_TOKEN；None = 不鉴权，v1 本地模式）
+    pub admin_token: Option<String>,
     /// 禁用应用集合（能力 API 对禁用应用返回 APP_NOT_FOUND；静态仍可访问）
     pub disabled: RwLock<HashSet<String>>,
 }
@@ -77,7 +79,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(proxy_api::routes())
         .merge(files_api::routes())
         .merge(ws_api::routes())
-        .merge(admin::api_routes())
+        .merge(
+            admin::api_routes().route_layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&state),
+                crate::admin::api::auth_middleware,
+            )),
+        )
         .merge(admin::page_routes())
         .fallback(not_found_fallback)
         .with_state(state)

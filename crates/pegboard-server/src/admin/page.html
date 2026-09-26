@@ -65,6 +65,9 @@
 <div class="bar">
   <input id="install-id" placeholder="应用 id（apps/ 目录名）" size="26">
   <button id="install">安装</button>
+  <span class="muted">或</span>
+  <input type="file" id="package" accept=".zip" hidden>
+  <button id="upload-package" title="上传 zip 应用包（包根含 manifest.json）">上传安装包</button>
   <span class="muted" id="install-msg">按清单校验后注册；失败会显示原因</span>
 </div>
 <table id="apps">
@@ -121,8 +124,30 @@ function esc(s) {
   })[c]);
 }
 
+function adminHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  const token = sessionStorage.getItem("pegboard-admin-token");
+  if (token) h["Authorization"] = "Bearer " + token;
+  return h;
+}
+
 async function j(url, opts) {
-  const r = await fetch(url, opts);
+  const init = Object.assign({}, opts || {});
+  init.headers = adminHeaders(init.headers);
+  let r = await fetch(url, init);
+  // 管理鉴权开启时：提示输入 token 并重试一次
+  if (r.status === 401) {
+    let body401 = {};
+    try { body401 = await r.json(); } catch (_) {}
+    if ((body401.error || {}).code === "TOKEN_INVALID") {
+      const token = prompt("宿主已启用管理鉴权，请输入管理 token：");
+      if (token) {
+        sessionStorage.setItem("pegboard-admin-token", token);
+        init.headers = adminHeaders(init.headers);
+        r = await fetch(url, init);
+      }
+    }
+  }
   if (r.ok) return r.status === 204 ? null : r.json();
   let body = {};
   try { body = await r.json(); } catch (_) {}
@@ -276,6 +301,24 @@ $("install").addEventListener("click", async () => {
 });
 $("install-id").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter") $("install").click();
+});
+
+$("upload-package").addEventListener("click", () => $("package").click());
+$("package").addEventListener("change", async () => {
+  const file = $("package").files[0];
+  if (!file) return;
+  $("install-msg").textContent = "上传安装中: " + file.name;
+  try {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const d = await j("/api/admin/apps/package", { method: "POST", body: form });
+    $("install-msg").textContent = "已安装 " + (d && d.id ? d.id : file.name);
+    $("package").value = "";
+    await refreshAll();
+  } catch (e) {
+    $("install-msg").innerHTML =
+      '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
+  }
 });
 
 // ---------- 应用详情模态框 ----------

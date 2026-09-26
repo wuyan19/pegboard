@@ -13,6 +13,10 @@ struct TestEnv {
 }
 
 fn state_with(manifests: &[(&str, &str)]) -> TestEnv {
+    state_with_opts(manifests, None)
+}
+
+fn state_with_opts(manifests: &[(&str, &str)], admin_token: Option<&str>) -> TestEnv {
     let root = tempfile::TempDir::new().expect("tempdir");
     let apps = root.path().join("apps");
     for (id, manifest) in manifests {
@@ -91,6 +95,7 @@ fn state_with(manifests: &[(&str, &str)]) -> TestEnv {
         signer: Arc::clone(&signer),
         host_db: Arc::clone(&host_db),
         started: std::time::Instant::now(),
+        admin_token: admin_token.map(str::to_owned),
         disabled: std::sync::RwLock::new(std::collections::HashSet::new()),
         proxy: Arc::new(proxy),
         config,
@@ -666,4 +671,150 @@ async fn admin_spa_fallback_and_asset_404() {
     assert_eq!(r.status(), StatusCode::OK);
     let r = call(&env, Method::GET, "/admin/missing.js").await;
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------- 批次三：管理鉴权 + zip 包安装 ----------
+
+fn env_with_token() -> TestEnv {
+    state_with_opts(
+        &[(
+            "a",
+            r#"{"id":"a","name":"A","entry":"index.html","permissions":{"store":true}}"#,
+        )],
+        Some("test-admin-token-123456"),
+    )
+}
+
+#[tokio::test]
+async fn admin_auth_required_when_token_set() {
+    let env = env_with_token();
+    // 无凭证 → 401 TOKEN_INVALID
+    let r = call(&env, Method::GET, "/api/admin/apps").await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let v = body_json(r).await;
+    assert_eq!(v["error"]["code"], "TOKEN_INVALID");
+    // 错误凭证 → 401
+    let req = Request::get("/api/admin/apps")
+        .header("authorization", "Bearer wrong-token-wrong-token")
+        .body(Body::empty())
+        .expect("request");
+    let r = build_router(Arc::clone(&env.state))
+        .oneshot(req)
+        .await
+        .expect("oneshot");
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    // 正确凭证 → 200
+    let req = Request::get("/api/admin/apps")
+        .header("authorization", "Bearer test-admin-token-123456")
+        .body(Body::empty())
+        .expect("request");
+    let r = build_router(Arc::clone(&env.state))
+        .oneshot(req)
+        .await
+        .expect("oneshot");
+    assert_eq!(r.status(), StatusCode::OK);
+    // 管理页外壳不受鉴权保护（无敏感数据）
+    let r = call(&env, Method::GET, "/admin").await;
+    assert_eq!(r.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn admin_auth_off_when_no_token() {
+    let env = env();
+    let r = call(&env, Method::GET, "/api/admin/apps").await;
+    assert_eq!(r.status(), StatusCode::OK);
+}
+
+/// 构造 zip 字节（含给定条目）。
+fn build_zip(entries: Vec<(&str, &[u8])>) -> Vec<u8> {
+    use std::io::Write;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut buf);
+        let opts: zip::write::SimpleFileOptions = Default::default();
+        for (name, data) in entries {
+            zip.start_file(name, opts).expect("start_file");
+            zip.write_all(data).expect("write");
+        }
+        zip.finish().expect("finish");
+    }
+    buf.into_inner()
+}
+
+async fn upload_package(env: &TestEnv, bytes: Vec<u8>) -> axum::http::Response<Body> {
+    let boundary = "pkgboundary";
+    let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"app.zip\"\r\nContent-Type: application/zip\r\n\r\n")
+        .into_bytes();
+    body.extend_from_slice(&bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let req = Request::post("/api/admin/apps/package")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .expect("request");
+    build_router(Arc::clone(&env.state))
+        .oneshot(req)
+        .await
+        .expect("oneshot")
+}
+
+#[tokio::test]
+async fn package_install_roundtrip() {
+    let env = env();
+    let manifest = br#"{"id":"packaged","name":"Packaged","entry":"index.html"}"#;
+    let zip = build_zip(vec![
+        ("manifest.json", manifest),
+        ("index.html", b"<h1>packaged</h1>"),
+        ("assets/app.js", b"console.log(1)"),
+    ]);
+    let r = upload_package(&env, zip).await;
+    assert_eq!(r.status(), StatusCode::OK, "包安装应成功");
+    let v = body_json(r).await;
+    assert_eq!(v["id"], "packaged");
+    assert_eq!(v["state"], "enabled");
+    // 产物落位 + 静态可访问
+    assert!(env._root.path().join("apps/packaged/index.html").exists());
+    assert!(env
+        ._root
+        .path()
+        .join("apps/packaged/assets/app.js")
+        .exists());
+    let r = call(&env, Method::GET, "/apps/packaged/").await;
+    assert_eq!(r.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn package_zip_slip_rejected() {
+    let env = env();
+    let manifest = br#"{"id":"slip","name":"Slip","entry":"index.html"}"#;
+    let zip = build_zip(vec![("manifest.json", manifest), ("../evil.txt", b"pwned")]);
+    let r = upload_package(&env, zip).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    // 未写出应用目录之外
+    assert!(!env._root.path().join("apps/evil.txt").exists());
+    assert!(!env._root.path().join("evil.txt").exists());
+    assert!(!env._root.path().join("apps/slip").exists());
+}
+
+#[tokio::test]
+async fn package_id_conflict_rejected() {
+    let env = env();
+    let manifest = br#"{"id":"a","name":"Dup","entry":"index.html"}"#;
+    let zip = build_zip(vec![("manifest.json", manifest), ("index.html", b"x")]);
+    let r = upload_package(&env, zip).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(r).await;
+    assert_eq!(v["error"]["code"], "INVALID_REQUEST");
+}
+
+#[tokio::test]
+async fn package_missing_manifest_400() {
+    let env = env();
+    let zip = build_zip(vec![("index.html", b"x")]);
+    let r = upload_package(&env, zip).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(r).await;
+    assert_eq!(v["error"]["code"], "INVALID_REQUEST");
 }

@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::multipart::MultipartError;
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State, State as ExtractState};
+use axum::http::{header, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -16,10 +18,14 @@ use pegboard_core::files::FilesError;
 use crate::ingress::error::{code, ApiError};
 use crate::ingress::AppState;
 
-/// 管理 API 路由，挂 /api/admin/*。
+/// 管理 API 路由，挂 /api/admin/*。设置了管理 token 时全部端点要求 Bearer 鉴权。
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/admin/status", get(status))
+        .route(
+            "/api/admin/apps/package",
+            post(install_package).layer(DefaultBodyLimit::disable()),
+        )
         .route("/api/admin/apps", get(list_apps))
         .route("/api/admin/apps/{id}", get(get_app))
         .route("/api/admin/apps/{id}/install", post(install_app))
@@ -28,6 +34,54 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/admin/apps/{id}/enable", post(enable_app))
         .route("/api/admin/apps/{id}/disable", post(disable_app))
         .route("/api/admin/logs", get(list_logs))
+}
+
+/// multipart 错误映射：长度类 → 413，其余 → 400。
+fn multipart_error(e: MultipartError) -> ApiError {
+    if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ApiError::new(code::LIMIT_EXCEEDED, 413, format!("请求体超出上限: {e}"))
+    } else {
+        ApiError::invalid_request(format!("multipart: {e}"))
+    }
+}
+
+/// 管理鉴权：配置了 token（env PEGBOARD_ADMIN_TOKEN）时校验 Bearer 凭证。
+pub async fn auth_middleware(
+    ExtractState(state): ExtractState<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let Some(expected) = &state.admin_token else {
+        return next.run(req).await;
+    };
+    let provided = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if fixed_time_eq(provided.as_bytes(), expected.as_bytes()) {
+        next.run(req).await
+    } else {
+        ApiError::new(
+            code::TOKEN_INVALID,
+            401,
+            "管理鉴权失败：缺少或错误的 Bearer token",
+        )
+        .into_response()
+    }
+}
+
+/// 定长比较，防时序侧信道。
+fn fixed_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// 宿主自身状态（只读元数据，不含业务数据）。
@@ -395,31 +449,7 @@ async fn install_app(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let apps_dir = state.config.storage.apps_dir.clone();
-    let limits = state.config.limits;
-    let state2 = Arc::clone(&state);
-    let id2 = id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let mut registry = state2
-            .apps
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        registry.reload_one(&apps_dir, &id2, &limits)
-    })
-    .await
-    .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("install join: {e}")))?;
-    let meta = result.map_err(ApiError::from)?;
-    state
-        .host_db
-        .upsert_app(
-            &meta.id,
-            &meta.name,
-            &meta.root.display().to_string(),
-            meta.manifest_json().as_slice(),
-        )
-        .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("host.db: {e}")))?;
-    audit_admin(&state, &id, Outcome::Ok, None);
-    get_app(State(state), Path(id)).await
+    install_app_inner(&state, &id).await
 }
 
 /// 卸载：注销注册表、失效签名 token；产物与数据目录保留，重装即恢复（数据模型 §9）。
@@ -540,6 +570,240 @@ fn audit_admin(state: &Arc<AppState>, app_id: &str, outcome: Outcome, error_code
     if let Err(e) = state.auditor.record(event) {
         tracing::error!(error = %e, "admin audit record failed");
     }
+}
+
+/// 应用包（zip）安装的安全护栏。
+const PACKAGE_MAX_COMPRESSED: u64 = 100 * 1024 * 1024; // zip 本体上限 100 MiB
+const PACKAGE_MAX_UNCOMPRESSED: u64 = 256 * 1024 * 1024; // 解压后总量上限
+const PACKAGE_MAX_ENTRIES: usize = 10_000;
+
+/// 上传 zip 应用包安装：流式落暂存 → 安全校验（zip-slip / 炸弹 / 冲突）→
+/// 解压到 apps/<id> → 走常规安装注册。
+async fn install_package(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> Result<Response, ApiError> {
+    // 1. 流式接收 zip 到暂存（压缩体上限内即断）
+    let staged = state
+        .config
+        .storage
+        .data_root
+        .join("tmp")
+        .join(pegboard_core::files::new_staging_name());
+    let mut size: u64 = 0;
+    {
+        use tokio::io::AsyncWriteExt;
+        if let Some(parent) = staged.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("暂存目录: {e}")))?;
+        }
+        let mut out = tokio::fs::File::create(&staged)
+            .await
+            .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("暂存失败: {e}")))?;
+        while let Some(mut field) = multipart.next_field().await.map_err(multipart_error)? {
+            if field.name() != Some("file") {
+                continue;
+            }
+            while let Some(chunk) = field.chunk().await.map_err(multipart_error)? {
+                size += chunk.len() as u64;
+                if size > PACKAGE_MAX_COMPRESSED {
+                    let _ = tokio::fs::remove_file(&staged).await;
+                    return Err(ApiError::new(
+                        code::LIMIT_EXCEEDED,
+                        413,
+                        format!("应用包超上限: {size} > {PACKAGE_MAX_COMPRESSED}"),
+                    ));
+                }
+                out.write_all(&chunk).await.map_err(|e| {
+                    ApiError::new(code::UPSTREAM_ERROR, 502, format!("暂存写入: {e}"))
+                })?;
+            }
+            break;
+        }
+        out.flush()
+            .await
+            .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("暂存写入: {e}")))?;
+    }
+    let result = tokio::task::spawn_blocking({
+        let state = Arc::clone(&state);
+        let staged = staged.clone();
+        move || process_package(&state, &staged)
+    })
+    .await
+    .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("package join: {e}")))?;
+    let _ = tokio::fs::remove_file(&staged).await; // 暂存使命完成
+    let installed_id = result?;
+    // 常规安装路径：校验 + 注册 + 落库 + 审计
+    install_app_inner(&state, &installed_id).await
+}
+
+/// 校验并解压 zip 到 apps/<id>，返回应用 id。
+fn process_package(state: &Arc<AppState>, staged: &std::path::Path) -> Result<String, ApiError> {
+    use std::io::Read;
+    let file = std::fs::File::open(staged)
+        .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("打开应用包: {e}")))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| ApiError::invalid_request(format!("应用包不是合法 zip: {e}")))?;
+    if archive.len() > PACKAGE_MAX_ENTRIES {
+        return Err(ApiError::invalid_request(format!(
+            "应用包条目过多: {} > {PACKAGE_MAX_ENTRIES}",
+            archive.len()
+        )));
+    }
+
+    // 预检：manifest.json 必须在包根；累计解压大小防炸弹；zip-slip 防护
+    let mut total: u64 = 0;
+    let mut manifest_raw: Option<String> = None;
+    let names: Vec<String> = (0..archive.len())
+        .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_owned()))
+        .collect();
+    for name in &names {
+        if name == "manifest.json" {
+            let mut f = archive
+                .by_name(name)
+                .map_err(|e| ApiError::invalid_request(format!("读取 manifest.json: {e}")))?;
+            let mut text = String::new();
+            f.read_to_string(&mut text)
+                .map_err(|e| ApiError::invalid_request(format!("manifest.json 读取失败: {e}")))?;
+            manifest_raw = Some(text);
+        }
+    }
+    let Some(manifest_raw) = manifest_raw else {
+        return Err(ApiError::invalid_request("应用包缺少根级 manifest.json"));
+    };
+    let manifest: pegboard_core::app::Manifest = serde_json::from_str(&manifest_raw)
+        .map_err(|e| ApiError::invalid_request(format!("manifest.json 解析失败: {e}")))?;
+    pegboard_core::app::validate_id(&manifest.id).map_err(ApiError::from)?;
+
+    // 冲突：目录 / 注册表 / 注册行 任一存在即拒绝
+    let apps_dir = &state.config.storage.apps_dir;
+    let registered = {
+        let registry = state
+            .apps
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        registry.contains(&manifest.id)
+    };
+    let has_row = state
+        .host_db
+        .app_states()
+        .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("host.db: {e}")))?
+        .contains_key(&manifest.id);
+    if apps_dir.join(&manifest.id).exists() || registered || has_row {
+        return Err(ApiError::invalid_request(format!(
+            "应用 id `{}` 已存在（目录或注册表冲突）",
+            manifest.id
+        )));
+    }
+
+    // 解压到暂存目录（与 apps 同盘 rename 失败时回退复制）
+    let staging = state
+        .config
+        .storage
+        .data_root
+        .join("tmp")
+        .join(format!("pkg-{}", pegboard_core::files::new_staging_name()));
+    let app_root = staging.join(&manifest.id);
+    std::fs::create_dir_all(&app_root)
+        .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("创建解压目录: {e}")))?;
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| ApiError::invalid_request(format!("应用包条目损坏: {e}")))?;
+        total += entry.size();
+        if total > PACKAGE_MAX_UNCOMPRESSED {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(ApiError::invalid_request(format!(
+                "应用包解压后超上限: > {PACKAGE_MAX_UNCOMPRESSED}"
+            )));
+        }
+        // zip-slip：enclosed_name 拒绝绝对路径与 .. 逃逸
+        let Some(rel) = entry.enclosed_name() else {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(ApiError::invalid_request(format!(
+                "应用包含不安全路径: {}",
+                entry.name()
+            )));
+        };
+        let dest = app_root.join(&rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&dest).map_err(|e| {
+                let _ = std::fs::remove_dir_all(&staging);
+                ApiError::new(code::UPSTREAM_ERROR, 502, format!("解压目录: {e}"))
+            })?;
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                let _ = std::fs::remove_dir_all(&staging);
+                ApiError::new(code::UPSTREAM_ERROR, 502, format!("解压目录: {e}"))
+            })?;
+        }
+        let mut out = std::fs::File::create(&dest).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&staging);
+            ApiError::new(code::UPSTREAM_ERROR, 502, format!("解压文件: {e}"))
+        })?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&staging);
+            ApiError::new(code::UPSTREAM_ERROR, 502, format!("解压写入: {e}"))
+        })?;
+    }
+
+    // 落位：staging/<id> → apps/<id>
+    let dest = apps_dir.join(&manifest.id);
+    if std::fs::rename(&app_root, &dest).is_err() {
+        copy_dir_recursive(&app_root, &dest).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&staging);
+            ApiError::new(code::UPSTREAM_ERROR, 502, format!("落位失败: {e}"))
+        })?;
+    }
+    let _ = std::fs::remove_dir_all(&staging);
+    tracing::info!(app_id = %manifest.id, entries = archive.len(), "app package installed");
+    Ok(manifest.id)
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dst.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// 安装公共尾部：校验注册 + 落库 + 审计 + 详情。
+async fn install_app_inner(state: &Arc<AppState>, id: &str) -> Result<Response, ApiError> {
+    let apps_dir = state.config.storage.apps_dir.clone();
+    let limits = state.config.limits;
+    let state2 = Arc::clone(state);
+    let id2 = id.to_owned();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut registry = state2
+            .apps
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        registry.reload_one(&apps_dir, &id2, &limits)
+    })
+    .await
+    .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("install join: {e}")))?;
+    let meta = result.map_err(ApiError::from)?;
+    state
+        .host_db
+        .upsert_app(
+            &meta.id,
+            &meta.name,
+            &meta.root.display().to_string(),
+            meta.manifest_json().as_slice(),
+        )
+        .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("host.db: {e}")))?;
+    audit_admin(state, id, Outcome::Ok, None);
+    get_app(ExtractState(Arc::clone(state)), Path(id.to_owned())).await
 }
 
 #[derive(Debug, Deserialize)]

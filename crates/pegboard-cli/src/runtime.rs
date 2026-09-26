@@ -98,6 +98,17 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
     )
     .map_err(|e| format!("构造代理器失败: {e}"))?;
     let signer = Arc::new(pegboard_core::files::Signer::new(Arc::clone(&host_db)));
+
+    // 管理鉴权：设置了 PEGBOARD_ADMIN_TOKEN 即启用（lan 部署建议配置；敏感项走环境变量）
+    let admin_token = match std::env::var("PEGBOARD_ADMIN_TOKEN") {
+        Ok(t) if !t.trim().is_empty() => {
+            if t.trim().len() < 16 {
+                return Err("PEGBOARD_ADMIN_TOKEN 长度须至少 16 字符".into());
+            }
+            Some(t.trim().to_owned())
+        }
+        _ => None,
+    };
     let state = Arc::new(AppState {
         identity: pegboard_core::identity::Identity::new(&config.identity),
         guard,
@@ -109,6 +120,7 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
         signer: Arc::clone(&signer),
         host_db: Arc::clone(&host_db),
         started: std::time::Instant::now(),
+        admin_token,
         disabled: RwLock::new(disabled),
         proxy: Arc::new(proxy),
         config: config.clone(),

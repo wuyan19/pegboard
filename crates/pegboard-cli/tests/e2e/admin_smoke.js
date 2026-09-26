@@ -111,7 +111,99 @@ const BASE = process.argv[2];
       );
     }
 
-    // 7. 无页面脚本错误
+    // 7. zip 上传安装（页面 UI 走 /api/admin/apps/package）
+    const fs2 = require("fs");
+    const JSZip = null; // 无依赖：用 Rust 端已验证；此处用 node 原生构造最小 zip（stored）
+    const crcTable = (() => {
+      const t = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        t[n] = c >>> 0;
+      }
+      return t;
+    })();
+    function crc32(buf) {
+      let c = 0xffffffff;
+      for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8);
+      return (c ^ 0xffffffff) >>> 0;
+    }
+    function buildZip(entries) {
+      const chunks = [];
+      const central = [];
+      let offset = 0;
+      for (const [name, data] of entries) {
+        const nameBytes = Buffer.from(name);
+        const crc = crc32(data);
+        const local = Buffer.alloc(30);
+        local.writeUInt32LE(0x04034b50, 0);
+        local.writeUInt16LE(20, 4);
+        local.writeUInt16LE(0, 6);
+        local.writeUInt16LE(0, 8);
+        local.writeUInt16LE(0, 10);
+        local.writeUInt16LE(0, 12);
+        local.writeUInt32LE(crc, 14);
+        local.writeUInt32LE(data.length, 18);
+        local.writeUInt32LE(data.length, 22);
+        local.writeUInt16LE(nameBytes.length, 26);
+        local.writeUInt16LE(0, 28);
+        chunks.push(local, nameBytes, data);
+        central.push({ nameBytes, crc, size: data.length, offset });
+        offset += 30 + nameBytes.length + data.length;
+      }
+      const centralStart = offset;
+      for (const e of central) {
+        const h = Buffer.alloc(46);
+        h.writeUInt32LE(0x02014b50, 0);
+        h.writeUInt16LE(20, 4);
+        h.writeUInt16LE(20, 6);
+        h.writeUInt16LE(0, 8);
+        h.writeUInt16LE(0, 10);
+        h.writeUInt16LE(0, 12);
+        h.writeUInt16LE(0, 14);
+        h.writeUInt32LE(e.crc, 16);
+        h.writeUInt32LE(e.size, 20);
+        h.writeUInt32LE(e.size, 24);
+        h.writeUInt16LE(e.nameBytes.length, 28);
+        h.writeUInt32LE(e.offset, 42);
+        chunks.push(h, e.nameBytes);
+        offset += 46 + e.nameBytes.length;
+      }
+      const end = Buffer.alloc(22);
+      end.writeUInt32LE(0x06054b50, 0);
+      end.writeUInt16LE(central.length, 8);
+      end.writeUInt16LE(central.length, 10);
+      end.writeUInt32LE(offset - centralStart, 12);
+      end.writeUInt32LE(centralStart, 16);
+      chunks.push(end);
+      return Buffer.concat(chunks);
+    }
+    const pkgZip = buildZip([
+      ["manifest.json", Buffer.from(JSON.stringify({ id: "ui-pkg", name: "UI Pkg", entry: "index.html" }))],
+      ["index.html", Buffer.from("<h1>ui-pkg</h1>")],
+    ]);
+    await page.setInputFiles("#package", {
+      name: "ui-pkg.zip",
+      mimeType: "application/zip",
+      buffer: pkgZip,
+    });
+    await page.waitForFunction(() =>
+      document.getElementById("install-msg").textContent.includes("已安装 ui-pkg")
+    );
+    // 上传的应用已注册并可访问
+    const pkgResp = await page.request.get(BASE + "/apps/ui-pkg/");
+    assert(pkgResp.status() === 200, "packaged app status: " + pkgResp.status());
+    // 清理
+    page.once("dialog", (d) => d.accept());
+    await page
+      .locator('#apps-body tr', { hasText: "ui-pkg" })
+      .locator('button[data-act="delete"]')
+      .click();
+    await page.waitForFunction(() =>
+      !document.querySelector("#apps-body").textContent.includes("ui-pkg")
+    );
+
+    // 8. 无页面脚本错误
     assert.deepStrictEqual(errors, [], "page errors: " + errors.join("; "));
 
     await context.close();
