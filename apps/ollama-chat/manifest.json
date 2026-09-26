@@ -1,0 +1,17 @@
+{
+  "id": "ollama-chat",
+  "name": "Ollama Chat",
+  "entry": "index.html",
+  "permissions": {
+    "store": true,
+    "files": false,
+    "net": ["http://127.0.0.1:11434"],
+    "ws": [],
+    "shim": true
+  },
+  "limits": {
+    "kv_value_bytes": 262144,
+    "kv_total_bytes": 10485760,
+    "net_rps": 20
+  }
+}

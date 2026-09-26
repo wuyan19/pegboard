@@ -456,6 +456,11 @@ impl Signer {
         Self { host }
     }
 
+    /// host.db 句柄（admin 等宿主元数据操作用）。
+    pub fn host(&self) -> &Arc<HostDb> {
+        &self.host
+    }
+
     /// 为 (app_id, file_id) 签发 ttl 秒有效的 token，返回明文。
     /// 明文只在此刻返回；库里存哈希。ttl 超过 ttl_max 拒绝（sign_ttl_max 不可覆盖）。
     pub fn sign(

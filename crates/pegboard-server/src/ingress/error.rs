@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
+use pegboard_core::app::AppError;
 use pegboard_core::guard::GuardError;
 use pegboard_core::store::StoreError;
 
@@ -126,6 +127,25 @@ impl From<StoreError> for ApiError {
             StoreError::Open(_) | StoreError::Io(_) => {
                 Self::new(code::UPSTREAM_ERROR, 502, format!("存储后端错误: {e}"))
             }
+        }
+    }
+}
+
+/// core AppError → ApiError（install/uninstall 路径）。
+impl From<AppError> for ApiError {
+    fn from(e: AppError) -> Self {
+        match &e {
+            AppError::InvalidId(_) | AppError::ManifestMissing(_) | AppError::DuplicateId(_) => {
+                Self::new(code::APP_NOT_FOUND, 404, e.to_string())
+            }
+            AppError::ManifestParse(_, _) | AppError::ManifestInvalid(_, _) => {
+                Self::invalid_request(e.to_string())
+            }
+            AppError::EntryMissing(_, _) | AppError::EntryEscape(_, _) => {
+                Self::invalid_request(e.to_string())
+            }
+            AppError::LimitsExceeded(_) => Self::invalid_request(e.to_string()),
+            AppError::Io(err) => Self::new(code::UPSTREAM_ERROR, 502, format!("io: {err}")),
         }
     }
 }

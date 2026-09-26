@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pegboard 管理页</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f7f7f8; color: #1c1c1e; }
+  @media (prefers-color-scheme: dark) { body { background: #161618; color: #e8e8ea; } }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 24px 0 8px; }
+  .sub { color: #888; margin-bottom: 20px; font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; background: var(--card, #fff); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  @media (prefers-color-scheme: dark) { table { background: #1e1e21; } }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(128,128,128,.2); font-size: 13px; vertical-align: top; }
+  th { font-weight: 600; color: #666; font-size: 12px; }
+  code { font-family: ui-monospace, monospace; font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; }
+  .ok { background: #d4f4dd; color: #14532d; }
+  .off { background: #f3d6d6; color: #7f1d1d; }
+  @media (prefers-color-scheme: dark) { .ok { background: #14351f; color: #7ee2a8; } .off { background: #3d1a1a; color: #f0a3a3; } }
+  button { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; cursor: pointer; }
+  button:hover { background: rgba(128,128,128,.12); }
+  .muted { color: #888; }
+  .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Pegboard</h1>
+<div class="sub">宿主管理 · 应用 / 权限 / 限额 / 审计日志（只读元数据，无业务数据）</div>
+
+<h2>应用</h2>
+<table id="apps">
+  <thead><tr><th>ID</th><th>名称</th><th>状态</th><th>权限</th><th>限额（生效）</th><th>操作</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>审计日志</h2>
+<div class="sub">能力调用事件（静态访问不入审计）。过滤：<code>?app=&action=&outcome=&limit=</code></div>
+<table id="logs">
+  <thead><tr><th>时间</th><th>应用</th><th>subject</th><th>动作</th><th>目标</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<script>
+"use strict";
+function fmtBytes(n) {
+  if (n >= 1073741824) return (n / 1073741824).toFixed(1) + " GiB";
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " MiB";
+  if (n >= 1024) return (n / 1024).toFixed(1) + " KiB";
+  return n + " B";
+}
+function fmtTime(ms) {
+  const d = new Date(ms);
+  return d.toLocaleString();
+}
+async function j(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(url + " " + r.status);
+  return r.status === 204 ? null : r.json();
+}
+async function loadApps() {
+  const apps = await j("/api/admin/apps");
+  const tbody = document.querySelector("#apps tbody");
+  tbody.innerHTML = "";
+  for (const a of apps) {
+    const tr = document.createElement("tr");
+    const perms = [
+      a.permissions.store && "store",
+      a.permissions.files && "files",
+      a.permissions.net.length && "net:" + a.permissions.net.join(", "),
+      a.permissions.ws.length && "ws:" + a.permissions.ws.join(", "),
+      "shim:" + a.permissions.shim,
+    ].filter(Boolean);
+    const limits = [
+      "kv " + fmtBytes(a.limits.kv_value_bytes) + " / " + fmtBytes(a.limits.kv_total_bytes),
+      "file " + fmtBytes(a.limits.file_bytes) + " / " + fmtBytes(a.limits.file_total_bytes),
+      a.limits.net_rps + " rps",
+    ];
+    tr.innerHTML =
+      "<td><code>" + a.id + "</code></td>" +
+      "<td>" + a.name + "</td>" +
+      '<td><span class="pill ' + (a.enabled ? "ok" : "off") + '">' + (a.enabled ? "启用" : "禁用") + "</span></td>" +
+      '<td class="mono">' + perms.join("<br>") + "</td>" +
+      '<td class="mono">' + limits.join("<br>") + "</td>" +
+      "<td>" +
+        '<button data-id="' + a.id + '" data-act="' + (a.enabled ? "disable" : "enable") + '">' +
+          (a.enabled ? "禁用" : "启用") + "</button> " +
+        '<button data-id="' + a.id + '" data-act="uninstall">卸载</button>' +
+      "</td>";
+    tbody.appendChild(tr);
+  }
+  tbody.querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", async () => {
+      const id = b.getAttribute("data-id");
+      const act = b.getAttribute("data-act");
+      if (act === "uninstall" && !confirm("卸载 " + id + "：删除其数据目录与签名 token，产物保留。继续？")) return;
+      try {
+        await j("/api/admin/apps/" + encodeURIComponent(id) + "/" + act, { method: "POST" });
+        await loadApps();
+      } catch (e) { alert(e.message); }
+    });
+  });
+}
+async function loadLogs() {
+  const logs = await j("/api/admin/logs?limit=100");
+  const tbody = document.querySelector("#logs tbody");
+  tbody.innerHTML = "";
+  for (const e of logs.items) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td class=\"muted\">" + fmtTime(e.ts) + "</td>" +
+      "<td><code>" + (e.app_id || "-") + "</code></td>" +
+      "<td>" + (e.subject || "-") + "</td>" +
+      "<td>" + e.action + "</td>" +
+      '<td class="mono">' + (e.target || "-") + "</td>" +
+      "<td>" + e.outcome + "</td>" +
+      '<td class="mono">' + (e.error_code || "-") + "</td>" +
+      "<td>" + e.duration_ms + " ms</td>";
+    tbody.appendChild(tr);
+  }
+  if (!logs.items.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="muted">暂无事件</td></tr>';
+  }
+}
+loadApps().catch((e) => console.error(e));
+loadLogs().catch((e) => console.error(e));
+</script>
+</body>
+</html>

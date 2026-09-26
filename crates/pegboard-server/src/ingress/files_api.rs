@@ -188,6 +188,8 @@ async fn list(
 #[derive(Debug, Deserialize)]
 struct FileQuery {
     token: Option<String>,
+    /// 原生导航（<a>/<img>）无法携带身份头时经查询参数（SDK url() 注入）
+    app: Option<String>,
 }
 
 /// 下载：无 token 走完整身份+治理；带 token 免 subject（签名路径）。
@@ -219,7 +221,13 @@ async fn get_one(
             }
         }
         None => {
-            let ctx = crate::ingress::context::manual_context(&state, &headers)?;
+            let mut effective = headers.clone();
+            if let Some(app) = &query.app {
+                if let Ok(value) = axum::http::HeaderValue::from_str(app) {
+                    effective.insert(axum::http::HeaderName::from_static("x-pegboard-app"), value);
+                }
+            }
+            let ctx = crate::ingress::context::manual_context(&state, &effective)?;
             trace_audit(&state, &ctx, ActionKind::Files, Some(id.clone()), async {
                 state
                     .guard

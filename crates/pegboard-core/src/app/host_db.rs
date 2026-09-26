@@ -112,6 +112,62 @@ impl HostDb {
         let n = conn.execute("DELETE FROM signed_tokens WHERE app_id = ?1", [app_id])?;
         Ok(n as u64)
     }
+
+    /// 注册 / 刷新应用行（安装时；enabled 保持既有值，首次默认 1）。
+    pub fn upsert_app(
+        &self,
+        id: &str,
+        name: &str,
+        path: &str,
+        manifest: &[u8],
+    ) -> Result<(), HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        conn.execute(
+            "INSERT INTO apps(id, name, path, manifest, enabled, installed_at)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, path = ?3, manifest = ?4",
+            rusqlite::params![id, name, path, manifest, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// 应用行状态：(enabled, installed_at)。
+    pub fn app_states(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (bool, i64)>, HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let mut stmt = conn.prepare("SELECT id, enabled, installed_at FROM apps")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)? != 0,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (id, enabled, installed_at) = row?;
+            out.insert(id, (enabled, installed_at));
+        }
+        Ok(out)
+    }
+
+    /// 设置启用状态（幂等）。
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        conn.execute(
+            "UPDATE apps SET enabled = ?2 WHERE id = ?1",
+            rusqlite::params![id, enabled as i64],
+        )?;
+        Ok(())
+    }
+
+    /// 删除应用行（卸载时）。
+    pub fn remove_app(&self, id: &str) -> Result<(), HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        conn.execute("DELETE FROM apps WHERE id = ?1", [id])?;
+        Ok(())
+    }
 }
 
 fn now_ms() -> i64 {
@@ -158,5 +214,21 @@ mod tests {
         assert_eq!(db.delete_app_tokens("a").unwrap(), 1);
         assert!(db.lookup_token("t1").unwrap().is_none());
         assert!(db.lookup_token("t2").unwrap().is_some());
+    }
+
+    #[test]
+    fn app_rows_lifecycle() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = HostDb::open(&dir.path().join("host.db")).unwrap();
+        db.upsert_app("a", "A", "/apps/a", b"{}").unwrap();
+        let states = db.app_states().unwrap();
+        assert_eq!(states.get("a").map(|s| s.0), Some(true));
+        db.set_enabled("a", false).unwrap();
+        assert_eq!(db.app_states().unwrap().get("a").map(|s| s.0), Some(false));
+        // 重复 upsert 不重置 enabled
+        db.upsert_app("a", "A2", "/apps/a", b"{}").unwrap();
+        assert_eq!(db.app_states().unwrap().get("a").map(|s| s.0), Some(false));
+        db.remove_app("a").unwrap();
+        assert!(!db.app_states().unwrap().contains_key("a"));
     }
 }

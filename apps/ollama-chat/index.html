@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ollama Chat</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; margin: 0; display: flex; height: 100vh; background: #f7f7f8; color: #1c1c1e; }
+  @media (prefers-color-scheme: dark) { body { background: #161618; color: #e8e8ea; } }
+  aside { width: 240px; border-right: 1px solid rgba(128,128,128,.25); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  main { flex: 1; display: flex; flex-direction: column; }
+  header { padding: 10px 16px; border-bottom: 1px solid rgba(128,128,128,.25); display: flex; gap: 8px; align-items: center; }
+  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 72%; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+  .user { align-self: flex-end; background: #0a84ff; color: #fff; }
+  .bot { align-self: flex-start; background: rgba(128,128,128,.15); }
+  form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid rgba(128,128,128,.25); }
+  input, select, button { font: inherit; border-radius: 8px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; padding: 6px 10px; }
+  #text { flex: 1; }
+  button { cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .sessions { flex: 1; overflow-y: auto; }
+  .session { padding: 6px 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; }
+  .session:hover { background: rgba(128,128,128,.12); }
+  .session.active { background: rgba(10,132,255,.18); }
+  .muted { color: #888; font-size: 12px; }
+  .status { font-size: 12px; color: #888; padding: 0 16px; }
+</style>
+</head>
+<body>
+<aside>
+  <div><strong>会话</strong> <span class="muted" id="who"></span></div>
+  <div class="muted">用户名用于会话隔离：<code>host.store</code> 键前缀</div>
+  <input id="name" placeholder="你的名字">
+  <button id="new-session">新会话</button>
+  <div class="sessions" id="sessions"></div>
+  <div class="muted">模型：<span id="model-count">?</span> 个</div>
+</aside>
+<main>
+  <header>
+    <select id="model"></select>
+    <span class="muted">Ollama @ 127.0.0.1:11434（经宿主代理，无 CORS）</span>
+  </header>
+  <div id="log"></div>
+  <div class="status" id="status"></div>
+  <form id="form">
+    <input id="text" placeholder="输入消息，Enter 发送" autocomplete="off">
+    <button id="send">发送</button>
+  </form>
+</main>
+<script>
+"use strict";
+// 使用规则（SDK 设计 §8）：跨域用 host.fetch、存储用 host.store、
+// 多用户用 host.user?.id 拼 key。本应用再叠加本地用户名维度。
+const OLLAMA = new URLSearchParams(location.search).get("api") || "http://127.0.0.1:11434";
+const $ = (id) => document.getElementById(id);
+const state = { user: "", session: "", sessions: {}, models: [], streaming: false };
+
+function key(...parts) {
+  return ["sessions", state.user || "anonymous", ...parts].join("/");
+}
+
+async function initIdentity() {
+  // 宿主 subject（fixed 模式下为配置值）；本地用户名提供第二维度
+  const hostSubject = (typeof host !== "undefined" && host.__pegboard) ? null : null;
+  state.user = localStorage.getItem("ollama-chat:user") || "";
+  $("who").textContent = state.user ? "@" + state.user : "";
+  $("name").value = state.user;
+  $("name").addEventListener("change", async () => {
+    state.user = $("name").value.trim();
+    localStorage.setItem("ollama-chat:user", state.user);
+    location.reload();
+  });
+}
+
+async function loadSessions() {
+  const items = await host.store.list(key(""));
+  state.sessions = {};
+  for (const item of items) {
+    const m = item.key.match(/sessions\/[^/]+\/([^/]+)\/meta$/);
+    if (!m) continue;
+    state.sessions[m[1]] = item.value;
+  }
+  renderSessions();
+}
+
+function renderSessions() {
+  const box = $("sessions");
+  box.innerHTML = "";
+  for (const [id, meta] of Object.entries(state.sessions)) {
+    const div = document.createElement("div");
+    div.className = "session" + (id === state.session ? " active" : "");
+    div.innerHTML = "<span>" + (meta.title || id.slice(0, 8)) + "</span>";
+    div.addEventListener("click", () => openSession(id));
+    box.appendChild(div);
+  }
+}
+
+async function openSession(id) {
+  state.session = id;
+  const log = await host.store.get(key(id, "log"));
+  renderLog(log || []);
+  renderSessions();
+}
+
+function renderLog(messages) {
+  const box = $("log");
+  box.innerHTML = "";
+  for (const m of messages) {
+    const div = document.createElement("div");
+    div.className = "msg " + (m.role === "user" ? "user" : "bot");
+    div.textContent = m.content;
+    box.appendChild(div);
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+async function newSession() {
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  state.session = id;
+  await host.store.set(key(id, "meta"), { title: "新会话", created: Date.now() });
+  await host.store.set(key(id, "log"), []);
+  renderLog([]);
+  await loadSessions();
+}
+
+async function loadModels() {
+  try {
+    const r = await host.fetch(OLLAMA + "/api/tags");
+    const data = await r.json();
+    state.models = (data.models || []).map((m) => m.name);
+    $("model-count").textContent = String(state.models.length);
+    const sel = $("model");
+    sel.innerHTML = "";
+    for (const name of state.models) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    }
+    if (!state.models.length) {
+      const opt = document.createElement("option");
+      opt.value = "llama3";
+      opt.textContent = "llama3（未取到列表）";
+      sel.appendChild(opt);
+    }
+  } catch (e) {
+    $("model-count").textContent = "0";
+    const opt = document.createElement("option");
+    opt.value = "llama3";
+    opt.textContent = "llama3（离线）";
+    $("model").appendChild(opt);
+  }
+}
+
+$("new-session").addEventListener("click", newSession);
+
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (state.streaming) return;
+  const text = $("text").value.trim();
+  if (!text) return;
+  $("text").value = "";
+  const logKey = key(state.session, "log");
+  const messages = (await host.store.get(logKey)) || [];
+  messages.push({ role: "user", content: text });
+  if (messages.length === 1) {
+    await host.store.set(key(state.session, "meta"), {
+      title: text.slice(0, 24), created: Date.now(),
+    });
+  }
+  renderLog(messages);
+  await host.store.set(logKey, messages);
+
+  state.streaming = true;
+  $("send").disabled = true;
+  $("status").textContent = "生成中…";
+  const reply = document.createElement("div");
+  reply.className = "msg bot";
+  reply.textContent = "";
+  $("log").appendChild(reply);
+  try {
+    // 流式对话（SDK 设计 §7）：host.fetch + body reader
+    const r = await host.fetch(OLLAMA + "/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: $("model").value || "llama3",
+        messages,
+        stream: true,
+      }),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let assistant = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const chunk = JSON.parse(line);
+        assistant += chunk.message?.content || "";
+        reply.textContent = assistant;
+        $("log").scrollTop = $("log").scrollHeight;
+      }
+    }
+    messages.push({ role: "assistant", content: assistant });
+    await host.store.set(logKey, messages);
+    await loadSessions();
+  } catch (e) {
+    reply.textContent = "错误: " + (e.code || e.message);
+  } finally {
+    state.streaming = false;
+    $("send").disabled = false;
+    $("status").textContent = "";
+  }
+});
+
+(async () => {
+  await initIdentity();
+  await loadModels();
+  await loadSessions();
+  const ids = Object.keys(state.sessions).sort();
+  if (ids.length) {
+    await openSession(ids[ids.length - 1]);
+  } else {
+    await newSession();
+  }
+})();
+</script>
+</body>
+</html>

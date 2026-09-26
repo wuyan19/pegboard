@@ -129,12 +129,13 @@ impl Default for AuditConfig {
     }
 }
 
-/// 审计共享核心：发送端 + 丢弃计数。
+/// 审计共享核心：发送端 + 丢弃计数 + 查询配置。
 /// Auditor（拥有写线程）与 AuditorHandle（轻量克隆）共用。
 /// tx 锁仅短持有（取克隆），不跨 await。
 struct AuditorShared {
     tx: std::sync::Mutex<Option<mpsc::SyncSender<AuditEvent>>>,
     dropped: AtomicU64,
+    config: AuditConfig,
 }
 
 impl AuditorShared {
@@ -162,7 +163,7 @@ impl AuditorShared {
     }
 }
 
-/// 审计器轻量句柄：可克隆，供 AppState / 各 handler 共享。
+/// 审计器轻量句柄：可克隆，供 AppState / 各 handler 共享；支持查询。
 #[derive(Clone)]
 pub struct AuditorHandle {
     shared: Arc<AuditorShared>,
@@ -177,6 +178,11 @@ impl AuditorHandle {
     /// 队列中被丢弃的事件总数。
     pub fn dropped(&self) -> u64 {
         self.shared.dropped.load(Ordering::Relaxed)
+    }
+
+    /// 查询：从滚动日志读取并过滤，按时间倒序（与 Auditor::query 同语义）。
+    pub fn query(&self, filter: &Filter) -> Result<Vec<AuditEvent>, AuditError> {
+        query_files(&self.shared.config, filter)
     }
 }
 
@@ -202,6 +208,7 @@ impl Auditor {
             shared: Arc::new(AuditorShared {
                 tx: std::sync::Mutex::new(Some(tx)),
                 dropped: AtomicU64::new(0),
+                config: config.clone(),
             }),
             writer: Some(writer),
             config,
@@ -234,42 +241,12 @@ impl Auditor {
     /// 查询：从滚动日志读取并过滤，按时间倒序返回。
     /// 只读最近 max_files 份，不做全量扫描。
     pub fn query(&self, filter: &Filter) -> Result<Vec<AuditEvent>, AuditError> {
-        let limit = filter.limit();
-        let mut out = Vec::new();
-        for path in self.file_sequence() {
-            let file = File::open(&path)?;
-            for line in BufReader::new(file).lines() {
-                let line = line?;
-                if let Some(event) = decode(&line) {
-                    if filter.matches(&event) {
-                        out.push(event);
-                    }
-                }
-            }
-        }
-        // 文件序列新 → 旧，文件内时间升序；整体按 ts 降序（稳定排序保留新文件优先）
-        out.sort_by(|a, b| b.ts.cmp(&a.ts));
-        out.truncate(limit);
-        Ok(out)
+        query_files(&self.config, filter)
     }
 
     /// 队列中被丢弃的事件总数，用于自监控。
     pub fn dropped(&self) -> u64 {
         self.shared.dropped.load(Ordering::Relaxed)
-    }
-
-    /// 新 → 旧的文件序列：audit.log、audit.log.1、…（共 max_files 份）。
-    fn file_sequence(&self) -> Vec<PathBuf> {
-        let mut files = vec![self.config.log_dir.join(&self.config.file_name)];
-        for i in 1..self.config.max_files.max(1) {
-            files.push(
-                self.config
-                    .log_dir
-                    .join(format!("{}.{}", self.config.file_name, i)),
-            );
-        }
-        files.retain(|p| p.is_file());
-        files
     }
 }
 
@@ -340,6 +317,32 @@ fn rotate(dir: &Path, name: &str, max_files: u32) -> Result<(), AuditError> {
         std::fs::rename(&current, &to)?;
     }
     Ok(())
+}
+
+/// 文件级查询实现：读最近 max_files 份，过滤后按 ts 降序截断。
+fn query_files(config: &AuditConfig, filter: &Filter) -> Result<Vec<AuditEvent>, AuditError> {
+    let limit = filter.limit();
+    let mut files = vec![config.log_dir.join(&config.file_name)];
+    for i in 1..config.max_files.max(1) {
+        files.push(config.log_dir.join(format!("{}.{}", config.file_name, i)));
+    }
+    files.retain(|p| p.is_file());
+    let mut out = Vec::new();
+    for path in files {
+        let file = File::open(&path)?;
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+            if let Some(event) = decode(&line) {
+                if filter.matches(&event) {
+                    out.push(event);
+                }
+            }
+        }
+    }
+    // 文件序列新 → 旧，文件内时间升序；整体按 ts 降序（稳定排序保留新文件优先）
+    out.sort_by(|a, b| b.ts.cmp(&a.ts));
+    out.truncate(limit);
+    Ok(out)
 }
 
 /// 单条编码上限 4 KiB：超长截断 target。

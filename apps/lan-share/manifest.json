@@ -1,0 +1,16 @@
+{
+  "id": "lan-share",
+  "name": "局域网文件共享",
+  "entry": "index.html",
+  "permissions": {
+    "store": false,
+    "files": true,
+    "net": [],
+    "ws": [],
+    "shim": true
+  },
+  "limits": {
+    "file_bytes": 104857600,
+    "file_total_bytes": 1073741824
+  }
+}

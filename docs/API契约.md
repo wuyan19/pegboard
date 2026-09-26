@@ -99,9 +99,11 @@ POST   /api/files/:id/sign       body: { "ttl": 600 }
 
 ```
 ANY /api/proxy?url=<encoded>     HTTP 代理，透传 method/body 与应用请求头
-GET /api/ws-proxy?url=<encoded>  WebSocket 升级
+GET /api/ws-proxy?url=<encoded>&app=<app_id>  WebSocket 升级
 GET /api/asset?url=<encoded>     资源代理，用于 img/font/css
 ```
+
+- `ws-proxy` 的 `app` 参数：浏览器 WebSocket API 无法携带自定义请求头，应用身份经查询参数传入（SDK 注入，与 `X-Pegboard-App` 头同信任级）。
 
 规则：
 - `url` 必须命中 `manifest.permissions.net`（asset 同）。

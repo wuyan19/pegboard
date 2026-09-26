@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>局域网文件共享</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f7f7f8; color: #1c1c1e; }
+  @media (prefers-color-scheme: dark) { body { background: #161618; color: #e8e8ea; } }
+  h1 { font-size: 18px; }
+  .drop { border: 2px dashed rgba(128,128,128,.4); border-radius: 12px; padding: 28px; text-align: center; background: var(--c, #fff); }
+  @media (prefers-color-scheme: dark) { .drop { background: #1e1e21; } }
+  .drop.hover { border-color: #0a84ff; background: rgba(10,132,255,.06); }
+  table { border-collapse: collapse; width: 100%; margin-top: 16px; background: var(--c, #fff); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  @media (prefers-color-scheme: dark) { table { background: #1e1e21; } }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid rgba(128,128,128,.2); font-size: 13px; }
+  button { font: inherit; border-radius: 6px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; padding: 4px 10px; cursor: pointer; }
+  .muted { color: #888; font-size: 12px; }
+  .share { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>局域网文件共享</h1>
+<div class="muted">上传 / 下载 / 签名分享链接（<code>host.files</code>）。签名链接在有效期内可被无身份访问。</div>
+
+<div class="drop" id="drop">
+  拖放文件到此处，或
+  <input type="file" id="picker" multiple hidden>
+  <button id="pick">选择文件</button>
+  <div class="muted" id="uploading"></div>
+</div>
+
+<table id="files">
+  <thead><tr><th>名称</th><th>大小</th><th>上传时间</th><th>操作</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+function fmtSize(n) {
+  if (n >= 1073741824) return (n / 1073741824).toFixed(1) + " GiB";
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " MiB";
+  if (n >= 1024) return (n / 1024).toFixed(1) + " KiB";
+  return n + " B";
+}
+
+async function refresh() {
+  const page = await host.files.list({ limit: 200 });
+  const tbody = document.querySelector("#files tbody");
+  tbody.innerHTML = "";
+  for (const f of page.items) {
+    const tr = document.createElement("tr");
+    const link = document.createElement("a");
+    link.href = host.files.url(f.id);
+    link.textContent = f.name;
+    link.download = f.name;
+    const actions = document.createElement("td");
+    const shareBtn = document.createElement("button");
+    shareBtn.textContent = "签名分享 10 分钟";
+    shareBtn.addEventListener("click", async () => {
+      try {
+        const url = await host.files.sign(f.id, 600);
+        shareBtn.parentElement.querySelector(".share")?.remove();
+        const div = document.createElement("div");
+        div.className = "share";
+        const a = document.createElement("a");
+        a.href = url;
+        a.textContent = url;
+        div.appendChild(a);
+        shareBtn.parentElement.appendChild(div);
+      } catch (e) {
+        alert("签名失败: " + (e.code || e.message));
+      }
+    });
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "删除";
+    delBtn.addEventListener("click", async () => {
+      await host.files.delete(f.id);
+      await refresh();
+    });
+    actions.append(shareBtn, " ", delBtn, document.createElement("div"));
+    const size = document.createElement("td");
+    size.textContent = fmtSize(f.size);
+    const time = document.createElement("td");
+    time.textContent = new Date(f.created).toLocaleString();
+    const name = document.createElement("td");
+    name.appendChild(link);
+    tr.append(name, size, time, actions);
+    tbody.appendChild(tr);
+  }
+}
+
+async function upload(file) {
+  $("uploading").textContent = "上传中: " + file.name;
+  try {
+    const meta = await host.files.upload(file);
+    $("uploading").textContent = "已上传: " + meta.name + " (" + fmtSize(meta.size) + ")";
+    await refresh();
+  } catch (e) {
+    $("uploading").textContent = "上传失败: " + (e.code || e.message);
+  }
+}
+
+$("pick").addEventListener("click", () => $("picker").click());
+$("picker").addEventListener("change", async () => {
+  for (const f of $("picker").files) await upload(f);
+  $("picker").value = "";
+});
+const drop = $("drop");
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("hover"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("hover"));
+drop.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  drop.classList.remove("hover");
+  for (const f of e.dataTransfer.files) await upload(f);
+});
+
+refresh().catch((e) => console.error(e));
+</script>
+</body>
+</html>

@@ -49,6 +49,15 @@ async fn serve_app_bare(
     serve_impl(&state, &app_id, "", method, headers).await
 }
 
+/// 固定身份模式下的 subject（注入页面供 host.user 使用）。
+fn fixed_subject(state: &Arc<AppState>) -> Option<String> {
+    use pegboard_core::config::IdentityConfig;
+    match &state.config.identity {
+        IdentityConfig::Fixed { subject } => subject.clone(),
+        _ => None,
+    }
+}
+
 async fn serve_impl(
     state: &Arc<AppState>,
     app_id: &str,
@@ -56,10 +65,11 @@ async fn serve_impl(
     method: Method,
     headers: HeaderMap,
 ) -> Response {
-    let app = match state.app_meta(app_id) {
+    let app = match state.app_meta_static(app_id) {
         Ok(app) => app,
         Err(e) => return e.into_response(),
     };
+    let subject = fixed_subject(state).clone();
     // 目标相对路径：空路径用 entry；目录路径补 index.html
     let rel: String = if path.is_empty() {
         app.manifest.entry.trim_start_matches("./").to_owned()
@@ -73,16 +83,20 @@ async fn serve_impl(
         return ApiError::not_found("路径非法").into_response();
     }
     match resolve_in_root(&app.root, &rel).await {
-        Some(absolute) => match serve_file(&absolute, &rel, &app, &method, &headers).await {
-            Ok(response) => response,
-            Err(StaticError::Missing) => fallback_response(&app, &rel, &method, &headers).await,
-            Err(StaticError::Io(e)) => {
-                tracing::error!(error = %e, app_id = %app.id, "static io error");
-                ApiError::not_found("资源不可用").into_response()
+        Some(absolute) => {
+            match serve_file(&absolute, &rel, &app, &method, &headers, subject.clone()).await {
+                Ok(response) => response,
+                Err(StaticError::Missing) => {
+                    fallback_response(&app, &rel, &method, &headers, subject).await
+                }
+                Err(StaticError::Io(e)) => {
+                    tracing::error!(error = %e, app_id = %app.id, "static io error");
+                    ApiError::not_found("资源不可用").into_response()
+                }
             }
-        },
+        }
         // 文件不存在（canonicalize 失败）或符号链接越界 → 回退判定
-        None => fallback_response(&app, &rel, &method, &headers).await,
+        None => fallback_response(&app, &rel, &method, &headers, subject).await,
     }
 }
 
@@ -119,6 +133,7 @@ async fn fallback_response(
     rel: &str,
     method: &Method,
     headers: &HeaderMap,
+    subject: Option<String>,
 ) -> Response {
     let looks_like_asset = rel
         .rsplit('/')
@@ -129,10 +144,12 @@ async fn fallback_response(
     }
     let entry_rel = app.manifest.entry.trim_start_matches("./");
     match resolve_in_root(&app.root, entry_rel).await {
-        Some(entry_abs) => match serve_file(&entry_abs, entry_rel, app, method, headers).await {
-            Ok(response) => response,
-            Err(_) => ApiError::not_found("入口文件不存在").into_response(),
-        },
+        Some(entry_abs) => {
+            match serve_file(&entry_abs, entry_rel, app, method, headers, subject).await {
+                Ok(response) => response,
+                Err(_) => ApiError::not_found("入口文件不存在").into_response(),
+            }
+        }
         None => ApiError::not_found("入口文件不存在").into_response(),
     }
 }
@@ -244,10 +261,10 @@ fn parse_range(value: &str, size: u64) -> Result<Option<(u64, u64)>, ()> {
 const MAX_INJECT_BYTES: u64 = 4 * 1024 * 1024;
 
 /// 注入引导与 SDK script：紧跟 <head ...> 之后；无 head 则前置。
-fn inject_sdk(html: &str, app_id: &str, shim: bool) -> String {
+fn inject_sdk(html: &str, app_id: &str, shim: bool, boot_subject: Option<String>) -> String {
     let boot = format!(
         "<script>window.__PEGBOARD__={}</script>\n<script src=\"/sdk.js\"></script>",
-        serde_json::json!({ "appId": app_id, "shim": shim })
+        serde_json::json!({ "appId": app_id, "shim": shim, "subject": boot_subject })
     );
     let lower = html.to_ascii_lowercase();
     if let Some(pos) = lower.find("<head") {
@@ -270,6 +287,7 @@ async fn serve_file(
     app: &Arc<pegboard_core::app::AppMeta>,
     method: &Method,
     headers: &HeaderMap,
+    subject: Option<String>,
 ) -> Result<Response, StaticError> {
     let metadata = tokio::fs::metadata(absolute).await.map_err(map_missing)?;
     if !metadata.is_file() {
@@ -315,7 +333,7 @@ async fn serve_file(
             .map_err(StaticError::Io)?;
         file.read_to_end(&mut buf).await.map_err(StaticError::Io)?;
         let html = String::from_utf8_lossy(&buf).into_owned();
-        let injected = inject_sdk(&html, &app.id, app.manifest.permissions.shim);
+        let injected = inject_sdk(&html, &app.id, app.manifest.permissions.shim, subject);
         let bytes = injected.into_bytes();
         let response = builder
             .header(header::CONTENT_LENGTH, bytes.len().to_string())
@@ -460,9 +478,10 @@ mod tests {
         })
         .expect("auditor")
         .handle();
-        let host_db =
-            pegboard_core::app::HostDb::open(&root.path().join("data/host.db")).expect("host db");
-        let signer = Arc::new(pegboard_core::files::Signer::new(Arc::new(host_db)));
+        let host_db = Arc::new(
+            pegboard_core::app::HostDb::open(&root.path().join("data/host.db")).expect("host db"),
+        );
+        let signer = Arc::new(pegboard_core::files::Signer::new(Arc::clone(&host_db)));
         let limits = config.limits;
         let proxy = pegboard_core::proxy::Proxy::new(
             Arc::new(pegboard_core::guard::Guard::new()),
@@ -481,6 +500,8 @@ mod tests {
                 root.path().join("data/tmp"),
             ),
             signer: Arc::clone(&signer),
+            host_db: Arc::clone(&host_db),
+            disabled: std::sync::RwLock::new(std::collections::HashSet::new()),
             proxy: Arc::new(proxy),
             config,
             apps: std::sync::RwLock::new(outcome.registry),
@@ -533,7 +554,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains(r#"window.__PEGBOARD__={"appId":"t","shim":true}"#),
+            text.contains(r#"window.__PEGBOARD__={"appId":"t","shim":true,"subject":null}"#),
             "{text}"
         );
         // 注入在 <head> 之后、应用内容之前

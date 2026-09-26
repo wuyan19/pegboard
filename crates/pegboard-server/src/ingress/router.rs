@@ -1,10 +1,11 @@
 //! 路由装配与全局状态。静态与 SDK 不过 guard、不要求 subject；
 //! 能力 API 经 RequestContext extractor（应用识别 + 身份解析）。
 
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
 use axum::Router;
-use pegboard_core::app::{AppMeta, AppRegistry};
+use pegboard_core::app::{AppMeta, AppRegistry, HostDb};
 use pegboard_core::audit::AuditorHandle;
 use pegboard_core::config::Config;
 use pegboard_core::guard::Guard;
@@ -12,6 +13,7 @@ use pegboard_core::identity::Identity;
 use pegboard_core::proxy::Proxy;
 use pegboard_core::store::StoreManager;
 
+use crate::admin;
 use crate::ingress::error::ApiError;
 use crate::ingress::files_api;
 use crate::ingress::proxy_api;
@@ -31,11 +33,32 @@ pub struct AppState {
     pub proxy: Arc<Proxy>,
     pub files: pegboard_core::files::FilesManager,
     pub signer: Arc<pegboard_core::files::Signer>,
+    /// host.db 句柄（admin 元数据操作）
+    pub host_db: Arc<HostDb>,
+    /// 禁用应用集合（能力 API 对禁用应用返回 APP_NOT_FOUND；静态仍可访问）
+    pub disabled: RwLock<HashSet<String>>,
 }
 
 impl AppState {
-    /// 短持有读锁，返回 Arc 克隆；不跨 await 持锁。
+    /// 能力路径应用解析：禁用即 APP_NOT_FOUND（admin 骨架语义）。
     pub fn app_meta(&self, id: &str) -> Result<Arc<AppMeta>, ApiError> {
+        self.app_meta_static(id)?;
+        let disabled = self
+            .disabled
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if disabled.contains(id) {
+            return Err(ApiError::app_not_found(id));
+        }
+        self.app_meta_unlocked(id)
+    }
+
+    /// 静态路径应用解析（不检查禁用状态：产物公开）。
+    pub fn app_meta_static(&self, id: &str) -> Result<Arc<AppMeta>, ApiError> {
+        self.app_meta_unlocked(id)
+    }
+
+    fn app_meta_unlocked(&self, id: &str) -> Result<Arc<AppMeta>, ApiError> {
         let guard = self
             .apps
             .read()
@@ -52,6 +75,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(proxy_api::routes())
         .merge(files_api::routes())
         .merge(ws_api::routes())
+        .merge(admin::api_routes())
+        .merge(admin::page_routes())
         .fallback(not_found_fallback)
         .with_state(state)
 }

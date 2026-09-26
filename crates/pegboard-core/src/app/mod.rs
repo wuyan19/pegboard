@@ -14,7 +14,7 @@ pub use host_db::{HostDb, HostDbError, SignedTokenRow};
 use crate::config::Limits;
 
 /// 应用清单，对应 apps/&lt;id&gt;/manifest.json。字段见 API 契约 §2。
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Manifest {
     pub id: String,
     pub name: String,
@@ -25,7 +25,7 @@ pub struct Manifest {
     pub limits: LimitsOverride,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Permissions {
     #[serde(default)]
     pub store: bool,
@@ -58,13 +58,20 @@ fn default_true() -> bool {
 
 /// 应用覆盖限额。键名与宿主配置 [limits] 完全一致（数据模型 §8），
 /// 只能收紧（覆盖值不得大于默认值）；`sign_ttl_max` 不可覆盖。
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 pub struct LimitsOverride {
     pub kv_value_bytes: Option<u64>,
     pub kv_total_bytes: Option<u64>,
     pub file_bytes: Option<u64>,
     pub file_total_bytes: Option<u64>,
     pub net_rps: Option<u32>,
+}
+
+impl AppMeta {
+    /// 清单序列化（host.db 缓存用；清单文件为权威）。
+    pub fn manifest_json(&self) -> Vec<u8> {
+        serde_json::to_vec(&self.manifest).unwrap_or_default()
+    }
 }
 
 /// 运行期应用元数据，由清单 + 路径 + 生效限额组成。

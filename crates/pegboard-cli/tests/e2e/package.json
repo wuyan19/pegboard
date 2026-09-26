@@ -1,0 +1,9 @@
+{
+  "name": "pegboard-e2e",
+  "private": true,
+  "description": "M7 场景测试：Playwright headless 驱动真实页面（使用系统 Chrome，channel=chrome）",
+  "scripts": {},
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}

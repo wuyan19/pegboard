@@ -1,0 +1,17 @@
+{
+  "id": "glm-quota",
+  "name": "GLM 额度查询",
+  "entry": "index.html",
+  "permissions": {
+    "store": true,
+    "files": false,
+    "net": ["https://open.bigmodel.cn"],
+    "ws": [],
+    "shim": true
+  },
+  "limits": {
+    "kv_value_bytes": 65536,
+    "kv_total_bytes": 1048576,
+    "net_rps": 10
+  }
+}

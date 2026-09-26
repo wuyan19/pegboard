@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLM 额度查询</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f7f7f8; color: #1c1c1e; max-width: 640px; margin: 0 auto; }
+  @media (prefers-color-scheme: dark) { body { background: #161618; color: #e8e8ea; } }
+  h1 { font-size: 18px; }
+  .card { background: var(--c, #fff); box-shadow: 0 1px 2px rgba(0,0,0,.06); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  @media (prefers-color-scheme: dark) { .card { background: #1e1e21; } }
+  input, button { font: inherit; border-radius: 8px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; padding: 6px 10px; }
+  input[type=password] { width: 100%; }
+  button { cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { padding: 4px 8px; text-align: left; border-bottom: 1px solid rgba(128,128,128,.2); font-size: 13px; }
+  .muted { color: #888; font-size: 12px; }
+  .ok { color: #0a84ff; font-weight: 600; }
+  .err { color: #d33; }
+</style>
+</head>
+<body>
+<h1>GLM 额度查询</h1>
+<div class="muted">跨域经宿主代理（无 CORS）；API Key 由应用自行保管于自身 KV（需求 §7）。</div>
+
+<div class="card">
+  <div><label>API Key <span class="muted">（存于本应用 KV，键 <code>api-key</code>）</span></label></div>
+  <div style="display:flex; gap:8px; margin-top:6px;">
+    <input type="password" id="key" placeholder="sk-...">
+    <button id="save-key">保存</button>
+  </div>
+</div>
+
+<div class="card">
+  <button id="refresh">查询额度</button>
+  <span class="muted" id="cached"></span>
+  <div id="result" style="margin-top:10px;"></div>
+</div>
+
+<script>
+"use strict";
+const API = new URLSearchParams(location.search).get("api") || "https://open.bigmodel.cn";
+const CACHE_KEY = "quota-cache";
+const $ = (id) => document.getElementById(id);
+
+function fail(e) {
+  $("result").innerHTML = '<span class="err">错误 ' + (e.code || "") + ": " + (e.message || e) + "</span>";
+}
+
+async function loadKey() {
+  const saved = await host.store.get("api-key");
+  if (saved) $("key").value = saved;
+  const cache = await host.store.get(CACHE_KEY);
+  if (cache && Date.now() - cache.at < 60_000) {
+    render(cache.data);
+    $("cached").textContent = "（缓存 " + Math.round((Date.now() - cache.at) / 1000) + "s 前）";
+  }
+}
+
+function render(data) {
+  const rows = [];
+  const walk = (obj, prefix) => {
+    for (const [k, v] of Object.entries(obj || {})) {
+      if (v && typeof v === "object") walk(v, prefix + k + ".");
+      else rows.push([prefix + k, String(v)]);
+    }
+  };
+  walk(data, "");
+  $("result").innerHTML = rows.length
+    ? '<table>' + rows.map(([k, v]) => "<tr><th>" + k + "</th><td>" + v + "</td></tr>").join("") + "</table>"
+    : '<pre class="ok">' + JSON.stringify(data, null, 2) + "</pre>";
+}
+
+$("save-key").addEventListener("click", async () => {
+  await host.store.set("api-key", $("key").value.trim());
+  $("cached").textContent = "已保存";
+});
+
+$("refresh").addEventListener("click", async () => {
+  $("cached").textContent = "";
+  $("result").textContent = "查询中…";
+  const apiKey = ($("key").value || "").trim();
+  if (!apiKey) {
+    $("result").innerHTML = '<span class="err">请先填写并保存 API Key</span>';
+    return;
+  }
+  try {
+    // 跨域拉取 + 缓存（SDK 设计 §7 示例）：host.fetch + Authorization
+    const r = await host.fetch(API + "/api/paas/v4/usage", {
+      headers: { Authorization: "Bearer " + apiKey },
+    });
+    if (!r.ok) throw Object.assign(new Error("HTTP " + r.status), { code: "UPSTREAM_ERROR" });
+    const data = await r.json();
+    render(data);
+    await host.store.set(CACHE_KEY, { at: Date.now(), data });
+  } catch (e) {
+    fail(e);
+  }
+});
+
+loadKey().catch(fail);
+</script>
+</body>
+</html>

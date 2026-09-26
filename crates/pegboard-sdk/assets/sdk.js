@@ -230,7 +230,9 @@
       });
     },
     url: function (id) {
-      return "/api/files/" + encodeURIComponent(String(id));
+      // 原生导航（<a>/<img>）无法携带身份头：app 经查询参数（与 ws-proxy 同法）
+      var base = "/api/files/" + encodeURIComponent(String(id));
+      return appId ? base + "?app=" + encodeURIComponent(appId) : base;
     },
     sign: function (id, ttlSec) {
       return fetch("/api/files/" + encodeURIComponent(String(id)) + "/sign", {
@@ -300,6 +302,10 @@
   window.host.fetch = hostFetch;
   window.host.url = hostUrl;
   window.host.connectWS = connectWS;
+  // host.user：不透明调用者标识，可为 null（fixed 匿名）或 undefined（宿主未提供）
+  if (boot && boot.subject !== undefined) {
+    window.host.user = { id: boot.subject === null ? null : String(boot.subject) };
+  }
   window.host.__pegboard = {
     appId: appId,
     shim: !boot || boot.shim !== false

@@ -53,6 +53,7 @@ declare namespace Pegboard {
     fetch(url: string, options?: RequestInit): Promise<Response>;
     connectWS(url: string): WebSocket;
     url(url: string): string;
+    user?: { id: string | null };
     __pegboard?: { appId: string | null; shim: boolean };
   }
 }
@@ -60,7 +61,7 @@ declare namespace Pegboard {
 declare global {
   interface Window {
     host: Pegboard.Host;
-    __PEGBOARD__?: { appId: string; shim: boolean };
+    __PEGBOARD__?: { appId: string; shim: boolean; subject?: string | null };
   }
 }
 

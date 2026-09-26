@@ -59,9 +59,19 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
         pegboard_core::proxy::ProxyConfig::default(),
     )
     .map_err(|e| format!("构造代理器失败: {e}"))?;
-    let host_db = pegboard_core::app::HostDb::open(&data_root.join("host.db"))
-        .map_err(|e| format!("打开 host.db 失败: {e}"))?;
-    let signer = Arc::new(pegboard_core::files::Signer::new(Arc::new(host_db)));
+    let host_db = Arc::new(
+        pegboard_core::app::HostDb::open(&data_root.join("host.db"))
+            .map_err(|e| format!("打开 host.db 失败: {e}"))?,
+    );
+    let signer = Arc::new(pegboard_core::files::Signer::new(Arc::clone(&host_db)));
+    // 禁用集合：从 host.db 恢复（能力 API 对禁用应用返回 APP_NOT_FOUND）
+    let disabled: std::collections::HashSet<String> = host_db
+        .app_states()
+        .map_err(|e| format!("读取 host.db 应用状态失败: {e}"))?
+        .into_iter()
+        .filter(|(_, (enabled, _))| !enabled)
+        .map(|(id, _)| id)
+        .collect();
     let state = Arc::new(AppState {
         identity: pegboard_core::identity::Identity::new(&config.identity),
         guard,
@@ -71,6 +81,8 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
             data_root.join("tmp"),
         ),
         signer: Arc::clone(&signer),
+        host_db: Arc::clone(&host_db),
+        disabled: RwLock::new(disabled),
         proxy: Arc::new(proxy),
         config: config.clone(),
         apps: RwLock::new(outcome.registry),

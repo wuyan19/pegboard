@@ -36,9 +36,10 @@ fn test_env_with(manifests: &[(&str, &str)]) -> TestEnv {
     })
     .expect("auditor")
     .handle();
-    let host_db =
-        pegboard_core::app::HostDb::open(&root.path().join("data/host.db")).expect("host db");
-    let signer = Arc::new(pegboard_core::files::Signer::new(Arc::new(host_db)));
+    let host_db = Arc::new(
+        pegboard_core::app::HostDb::open(&root.path().join("data/host.db")).expect("host db"),
+    );
+    let signer = Arc::new(pegboard_core::files::Signer::new(Arc::clone(&host_db)));
     let limits = config.limits;
     let proxy = pegboard_core::proxy::Proxy::new(
         Arc::new(pegboard_core::guard::Guard::new()),
@@ -54,6 +55,8 @@ fn test_env_with(manifests: &[(&str, &str)]) -> TestEnv {
             root.path().join("data/tmp"),
         ),
         signer: Arc::clone(&signer),
+        host_db: Arc::clone(&host_db),
+        disabled: std::sync::RwLock::new(std::collections::HashSet::new()),
         proxy: Arc::new(proxy),
         config,
         apps: std::sync::RwLock::new(outcome.registry),
