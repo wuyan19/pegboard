@@ -501,6 +501,7 @@ mod tests {
             ),
             signer: Arc::clone(&signer),
             host_db: Arc::clone(&host_db),
+            started: std::time::Instant::now(),
             disabled: std::sync::RwLock::new(std::collections::HashSet::new()),
             proxy: Arc::new(proxy),
             config,

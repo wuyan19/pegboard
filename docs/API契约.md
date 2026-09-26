@@ -176,16 +176,19 @@ interface Host {
 ## 8. 管理 API（宿主元数据）
 
 ```
+GET  /api/admin/status
 GET  /api/admin/apps
 GET  /api/admin/apps/:id
 POST /api/admin/apps/:id/install     触发扫描并注册（清单校验通过）
 POST /api/admin/apps/:id/uninstall   注销应用，删除数据目录与签名 token，产物保留
 POST /api/admin/apps/:id/enable
 POST /api/admin/apps/:id/disable
-GET  /api/admin/logs?app=&since=&limit=
+GET  /api/admin/logs?app=&action=&outcome=&since=&until=&limit=&cursor=
 ```
 
 - 只操作宿主元数据，不读写应用业务数据。
+- `status` 返回宿主自身状态：version、mode、identity、listen、data_root、apps_dir、uptime_secs、audit_dropped。
+- `GET /api/admin/apps/:id` 详情在应用视图外附 `usage` 实际用量：`{ "kv": { "bytes", "keys" }, "files": { "bytes", "count" } }`；未使用过的应用为 0。
 - 是否鉴权由部署配置决定。
 
 ## 9. 版本与兼容

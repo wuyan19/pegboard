@@ -82,6 +82,7 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
         ),
         signer: Arc::clone(&signer),
         host_db: Arc::clone(&host_db),
+        started: std::time::Instant::now(),
         disabled: RwLock::new(disabled),
         proxy: Arc::new(proxy),
         config: config.clone(),

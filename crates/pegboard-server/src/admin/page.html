@@ -34,10 +34,13 @@
   button:hover { background: rgba(128,128,128,.12); }
   .muted { color: #888; }
   #status { font-size: 12px; color: #888; }
+  .usage-bar { height: 6px; background: rgba(128,128,128,.2); border-radius: 3px; width: 140px; display: inline-block; vertical-align: middle; margin-right: 6px; }
+  .usage-fill { height: 100%; border-radius: 3px; background: #0a84ff; }
+  tr.detail > td { background: rgba(128,128,128,.06); }
 </style>
 </head>
 <body>
-<h1>Pegboard</h1>
+<h1>Pegboard <span class="muted" id="server-info"></span></h1>
 <div class="sub">宿主管理 · 应用 / 权限 / 限额 / 审计日志（只读元数据，无业务数据）· <span id="status">加载中…</span></div>
 
 <h2>应用 <button id="refresh" title="立即刷新（每 10 秒自动刷新）">刷新</button></h2>
@@ -169,7 +172,8 @@ async function loadApps() {
           '<button data-id="' + esc(a.id) + '" data-act="' + (a.enabled ? "disable" : "enable") + '" title="' +
             (a.enabled ? "禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问" : "恢复能力 API 访问") + '">' +
             (a.enabled ? "禁用" : "启用") + "</button> " +
-          '<button data-id="' + esc(a.id) + '" data-act="uninstall" title="删除数据目录与签名 token，产物目录保留">卸载</button>' +
+          '<button data-id="' + esc(a.id) + '" data-act="uninstall" title="删除数据目录与签名 token，产物目录保留">卸载</button> ' +
+          '<button data-id="' + esc(a.id) + '" data-act="usage" title="实际用量 vs 限额">用量</button>' +
         "</td>";
       tbody.appendChild(tr);
     }
@@ -177,6 +181,7 @@ async function loadApps() {
       b.addEventListener("click", async () => {
         const id = b.getAttribute("data-id");
         const act = b.getAttribute("data-act");
+        if (act === "usage") return toggleUsage(b, id);
         if (act === "uninstall" &&
             !confirm("卸载 " + id + "：删除其数据目录与签名 token，产物目录保留。继续？")) return;
         try {
@@ -220,6 +225,45 @@ $("install").addEventListener("click", async () => {
 $("install-id").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter") $("install").click();
 });
+
+// ---------- 用量详情 ----------
+
+function usageLine(label, used, max, count, unit) {
+  const pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
+  const over = used > max;
+  return (
+    "<div>" + label +
+    ' <span class="usage-bar"><span class="usage-fill" style="width:' + pct + '%;' +
+      (over ? "background:#d33" : "") + '"></span></span>' +
+    '<span class="mono">' + fmtBytes(used) + " / " + fmtBytes(max) + "（" + pct + "%）" +
+    " · " + count + " " + unit + "</span></div>"
+  );
+}
+
+async function toggleUsage(button, id) {
+  const row = button.closest("tr");
+  const existing = row.nextElementSibling;
+  if (existing && existing.classList.contains("detail")) {
+    existing.remove();
+    return;
+  }
+  const detail = document.createElement("tr");
+  detail.className = "detail";
+  detail.innerHTML = '<td colspan="6" class="muted">读取用量中…</td>';
+  row.after(detail);
+  try {
+    const d = await j("/api/admin/apps/" + encodeURIComponent(id));
+    detail.innerHTML =
+      '<td colspan="6">' +
+      usageLine("KV　", d.usage.kv.bytes, d.limits.kv_total_bytes, d.usage.kv.keys, "键") +
+      usageLine("文件", d.usage.files.bytes, d.limits.file_total_bytes, d.usage.files.count, "个") +
+      "</td>";
+  } catch (e) {
+    detail.innerHTML =
+      '<td colspan="6"><span class="pill err">' + esc(e.code || "ERROR") + "</span> " +
+      esc(e.message || e) + "</td>";
+  }
+}
 
 // ---------- 审计日志 ----------
 
@@ -271,8 +315,20 @@ for (const id of ["f-app", "f-action", "f-outcome", "f-limit"]) {
 let appsInFlight = false;
 let logsInFlight = false;
 
+async function loadStatus() {
+  try {
+    const s = await j("/api/admin/status");
+    $("server-info").textContent =
+      "v" + s.version + " · " + s.mode + " · " + s.listen +
+      " · 运行 " + Math.round(s.uptime_secs / 60) + " 分钟" +
+      (s.audit_dropped ? " · 审计丢弃 " + s.audit_dropped : "");
+  } catch (_) {
+    $("server-info").textContent = "";
+  }
+}
+
 async function refreshAll() {
-  await Promise.allSettled([loadApps(), loadLogs()]);
+  await Promise.allSettled([loadApps(), loadLogs(), loadStatus()]);
 }
 
 $("refresh").addEventListener("click", refreshAll);

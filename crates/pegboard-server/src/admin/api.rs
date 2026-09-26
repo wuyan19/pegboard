@@ -18,6 +18,7 @@ use crate::ingress::AppState;
 /// 管理 API 路由，挂 /api/admin/*。
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/api/admin/status", get(status))
         .route("/api/admin/apps", get(list_apps))
         .route("/api/admin/apps/{id}", get(get_app))
         .route("/api/admin/apps/{id}/install", post(install_app))
@@ -25,6 +26,56 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/admin/apps/{id}/enable", post(enable_app))
         .route("/api/admin/apps/{id}/disable", post(disable_app))
         .route("/api/admin/logs", get(list_logs))
+}
+
+/// 宿主自身状态（只读元数据，不含业务数据）。
+#[derive(serde::Serialize)]
+struct StatusView {
+    version: &'static str,
+    mode: &'static str,
+    identity: &'static str,
+    listen: String,
+    data_root: String,
+    apps_dir: String,
+    uptime_secs: u64,
+    audit_dropped: u64,
+}
+
+async fn status(State(state): State<Arc<AppState>>) -> Json<StatusView> {
+    let cfg = &state.config;
+    let (mode, identity) = match (&cfg.server.mode, &cfg.identity) {
+        (pegboard_core::config::Mode::Local, _) => ("local", "fixed"),
+        (pegboard_core::config::Mode::Lan, pegboard_core::config::IdentityConfig::Fixed { .. }) => {
+            ("lan", "fixed")
+        }
+        (
+            pegboard_core::config::Mode::Lan,
+            pegboard_core::config::IdentityConfig::Forwarded { .. },
+        ) => ("lan", "forwarded"),
+        (
+            pegboard_core::config::Mode::Lan,
+            pegboard_core::config::IdentityConfig::Tokens { .. },
+        ) => ("lan", "tokens"),
+        // Local 模式搭配 forwarded/tokens 身份来源：模式仍报 local，身份照实报
+        (
+            pegboard_core::config::Mode::Local,
+            pegboard_core::config::IdentityConfig::Forwarded { .. },
+        ) => ("local", "forwarded"),
+        (
+            pegboard_core::config::Mode::Local,
+            pegboard_core::config::IdentityConfig::Tokens { .. },
+        ) => ("local", "tokens"),
+    };
+    Json(StatusView {
+        version: env!("CARGO_PKG_VERSION"),
+        mode,
+        identity,
+        listen: cfg.server.listen.to_string(),
+        data_root: cfg.storage.data_root.display().to_string(),
+        apps_dir: cfg.storage.apps_dir.display().to_string(),
+        uptime_secs: state.started.elapsed().as_secs(),
+        audit_dropped: state.auditor.dropped(),
+    })
 }
 
 /// 应用摘要（含启用状态与生效限额）。
@@ -96,7 +147,52 @@ async fn get_app(
         .app_states()
         .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("host.db: {e}")))?;
     let (enabled, installed_at) = states.get(&id).copied().unwrap_or((true, 0));
-    Ok((StatusCode::OK, Json(view_of(&meta, enabled, installed_at))).into_response())
+    let mut view = serde_json::to_value(view_of(&meta, enabled, installed_at))
+        .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("序列化: {e}")))?;
+    view["usage"] = app_usage(&state, &meta).await;
+    Ok((StatusCode::OK, Json(view)).into_response())
+}
+
+/// 实际用量 vs 限额（架构设计「管理层」）：KV 字节/键数、文件字节/个数。
+/// 未使用过的应用没有落库文件，直接报 0（避免惰性打开产生副作用）。
+async fn app_usage(state: &Arc<AppState>, meta: &pegboard_core::app::AppMeta) -> serde_json::Value {
+    let app_dir = state
+        .config
+        .storage
+        .data_root
+        .join("apps_data")
+        .join(&meta.id);
+    let has_kv = app_dir.join("app.db").is_file();
+    let has_files = app_dir.join("files").is_dir();
+    let limits = meta.limits;
+    let app_id = meta.id.clone();
+    let state = Arc::clone(state);
+    let kv_files = tokio::task::spawn_blocking(move || {
+        let kv = if has_kv {
+            state.stores.with(&app_id, &limits, |s| s.usage()).ok()
+        } else {
+            None
+        };
+        let files = if has_files {
+            state.files.with(&app_id, &limits, |f| f.usage()).ok()
+        } else {
+            None
+        };
+        (kv, files)
+    })
+    .await
+    .unwrap_or((None, None));
+    let (kv, files) = kv_files;
+    json!({
+        "kv": {
+            "bytes": kv.as_ref().map_or(0, |u| u.bytes),
+            "keys": kv.as_ref().map_or(0, |u| u.keys),
+        },
+        "files": {
+            "bytes": files.as_ref().map_or(0, |u| u.0),
+            "count": files.as_ref().map_or(0, |u| u.1),
+        },
+    })
 }
 
 async fn enable_app(

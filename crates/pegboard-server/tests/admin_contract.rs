@@ -77,6 +77,7 @@ fn state_with(manifests: &[(&str, &str)]) -> TestEnv {
         ),
         signer: Arc::clone(&signer),
         host_db: Arc::clone(&host_db),
+        started: std::time::Instant::now(),
         disabled: std::sync::RwLock::new(std::collections::HashSet::new()),
         proxy: Arc::new(proxy),
         config,
@@ -302,6 +303,80 @@ async fn logs_returned_desc_with_filters() {
 
     let r = call(&env, Method::GET, "/api/admin/logs?action=Nope").await;
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn app_detail_includes_usage() {
+    // 写一条 KV + 上传一个文件，详情 usage 应反映实际用量
+    let env = state_with(&[(
+        "a",
+        r#"{"id":"a","name":"A","entry":"index.html","permissions":{"store":true,"files":true}}"#,
+    )]);
+    let req = Request::put("/api/store/kv/k")
+        .header("x-pegboard-app", "a")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"value":"x"}"#))
+        .expect("request");
+    let r = build_router(Arc::clone(&env.state))
+        .oneshot(req)
+        .await
+        .expect("oneshot");
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+    let boundary = "pegboardtestboundary";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"f.txt\"\r\nContent-Type: text/plain\r\n\r\n12345\r\n--{boundary}--\r\n"
+    );
+    let req = Request::post("/api/files")
+        .header("x-pegboard-app", "a")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .expect("request");
+    let r = build_router(Arc::clone(&env.state))
+        .oneshot(req)
+        .await
+        .expect("oneshot");
+    assert_eq!(r.status(), StatusCode::OK, "文件上传应成功");
+
+    let r = call(&env, Method::GET, "/api/admin/apps/a").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let v = body_json(r).await;
+    assert_eq!(v["usage"]["kv"]["keys"], 1);
+    assert_eq!(v["usage"]["kv"]["bytes"], 3); // JSON 字符串 "x" 含引号 3 字节
+    assert_eq!(v["usage"]["files"]["count"], 1);
+    assert_eq!(v["usage"]["files"]["bytes"], 5);
+}
+
+#[tokio::test]
+async fn app_detail_usage_zero_when_unused() {
+    // 未使用过的应用没有落库文件，usage 为 0 且不产生副作用
+    let env = env();
+    let r = call(&env, Method::GET, "/api/admin/apps/b").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let v = body_json(r).await;
+    assert_eq!(v["usage"]["kv"]["keys"], 0);
+    assert_eq!(v["usage"]["files"]["count"], 0);
+    assert!(
+        !env._root.path().join("data/apps_data/b").exists(),
+        "查询用量不应创建应用数据目录"
+    );
+}
+
+#[tokio::test]
+async fn status_endpoint() {
+    let env = env();
+    let r = call(&env, Method::GET, "/api/admin/status").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let v = body_json(r).await;
+    assert!(v["version"].as_str().is_some_and(|s| !s.is_empty()));
+    assert_eq!(v["mode"], "local");
+    assert_eq!(v["identity"], "fixed");
+    assert!(v["listen"].as_str().is_some_and(|s| s.contains(':')));
+    assert!(v["uptime_secs"].is_u64());
+    assert_eq!(v["audit_dropped"], 0);
 }
 
 #[tokio::test]

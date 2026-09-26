@@ -35,6 +35,8 @@ pub struct AppState {
     pub signer: Arc<pegboard_core::files::Signer>,
     /// host.db 句柄（admin 元数据操作）
     pub host_db: Arc<HostDb>,
+    /// 进程启动时刻（admin 状态页的 uptime）
+    pub started: std::time::Instant,
     /// 禁用应用集合（能力 API 对禁用应用返回 APP_NOT_FOUND；静态仍可访问）
     pub disabled: RwLock<HashSet<String>>,
 }
