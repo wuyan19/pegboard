@@ -62,7 +62,9 @@ hex = "0.4.3"
 ulid = "1.1.3"
 
 # ---- CLI ----
-clap = { version = "4.6.1", default-features = false, features = ["std"] }
+# help/usage/error-context/suggestions：关闭 default-features 后需显式开启，
+# 否则 -h/--help 不可用且错误信息退化（如 "unexpected argument found"）
+clap = { version = "4.6.1", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions"] }
 
 # ---- 日志 ----
 tracing = "0.1.44"

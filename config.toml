@@ -1,5 +1,5 @@
 [server]
-listen = "127.0.0.1:8787"
+listen = "0.0.0.0:8787"
 mode = "local"
 
 [identity]
