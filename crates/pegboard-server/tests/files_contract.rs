@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{header, Request, StatusCode};
 use pegboard_server::ingress::{build_router, AppState};
 use tower::ServiceExt;
 
@@ -284,7 +284,7 @@ async fn upload_too_large_413() {
         "t",
         r#"{"id":"t","name":"T","entry":"index.html","permissions":{"files":true},"limits":{"file_bytes":64}}"#,
     )]);
-    let r = upload(&env, "big.bin", &vec![0u8; 128]).await;
+    let r = upload(&env, "big.bin", &[0u8; 128]).await;
     assert_eq!(r.status(), StatusCode::PAYLOAD_TOO_LARGE);
     let v = body_json(r).await;
     assert_eq!(v["error"]["code"], "LIMIT_EXCEEDED");
