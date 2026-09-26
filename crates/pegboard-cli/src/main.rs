@@ -1,5 +1,15 @@
-//! pegboard：单二进制入口。装配与启动在 M1/M2 里程碑补齐。
+//! pegboard：单二进制入口。装配与启动见 cli 模块。
 
-fn main() {
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "pegboard");
+mod cli;
+
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    match cli::run() {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("pegboard: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
