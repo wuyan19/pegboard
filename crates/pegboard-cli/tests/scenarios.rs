@@ -272,3 +272,70 @@ async fn scenario_sdk_files_upload_download_sign() {
     );
     assert!(text.contains("SDK-FILES-SCENARIO-OK"), "{text}");
 }
+
+/// WS echo 上游（tungstenite accept + echo，含 Close 回帧）。
+async fn spawn_ws_echo_upstream() -> std::net::SocketAddr {
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use tokio_tungstenite::tungstenite::Message as TgMessage;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        loop {
+            let Ok((socket, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut ws = match tokio_tungstenite::accept_async(socket).await {
+                    Ok(ws) => ws,
+                    Err(_) => return,
+                };
+                while let Some(Ok(msg)) = ws.next().await {
+                    match msg {
+                        TgMessage::Text(_) | TgMessage::Binary(_) | TgMessage::Ping(_) => {
+                            if ws.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                        TgMessage::Close(frame) => {
+                            let _ = ws.send(TgMessage::Close(frame)).await;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn scenario_sdk_connectws_echo() {
+    let echo_addr = spawn_ws_echo_upstream().await;
+    let upstream = format!("ws://{echo_addr}/");
+    let perms = format!(r#"{{"ws":[{:?}]}}"#, upstream);
+    let (child, base, _root) = start_server(&[("wstest", &perms)]);
+    // tokio::process：异步等待，让本测试内的 echo 上游任务持续推进
+    let out = tokio::process::Command::new("node")
+        .arg("tests/fixtures/sdk_ws_scenario.js")
+        .arg(&base)
+        .arg(&upstream)
+        .arg(sdk_path())
+        .output()
+        .await
+        .expect("run node scenario");
+    stop_server(child);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "node ws scenario failed:\n{text}\nstatus: {:?}",
+        out.status.code()
+    );
+    assert!(text.contains("SDK-WS-SCENARIO-OK"), "{text}");
+}

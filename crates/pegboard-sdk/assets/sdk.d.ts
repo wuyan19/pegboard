@@ -1,4 +1,4 @@
-// pegboard sdk.d.ts — M5：store / files / fetch / url 类型。connectWS 随 M6 提供。
+// pegboard sdk.d.ts — M6：全量类型（store / files / fetch / connectWS / url）。
 declare namespace Pegboard {
   interface HostError extends Error {
     code:
@@ -51,6 +51,7 @@ declare namespace Pegboard {
     store: Store;
     files: Files;
     fetch(url: string, options?: RequestInit): Promise<Response>;
+    connectWS(url: string): WebSocket;
     url(url: string): string;
     __pegboard?: { appId: string | null; shim: boolean };
   }

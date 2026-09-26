@@ -1,5 +1,4 @@
-// pegboard sdk.js — M5：host.store + host.files + host.fetch + fetch shim + host.url。
-// connectWS 随 M6 提供。
+// pegboard sdk.js — M6：store / files / fetch / url / connectWS 全量。fetch shim 随 permissions.shim。
 // 注入约定：宿主在本脚本之前注入
 //   <script>window.__PEGBOARD__ = { appId: "...", shim: true }</script>
 (function () {
@@ -277,11 +276,30 @@
     }
   };
 
+  // ---- host.connectWS：返回原生 WebSocket（API 契约 §7）----
+  // 浏览器 WS 无法携带自定义头：应用身份经查询参数（服务端 ws-proxy 支持）。
+
+  function connectWS(target) {
+    var t = String(target);
+    if (t.indexOf("/") === 0) {
+      return new WebSocket(t);
+    }
+    var scheme = t.indexOf("wss://") === 0 ? "wss" : "ws";
+    // 同源 ws(s) 代理端点；跨端口场景按当前页面协议
+    var base = (location && location.host)
+      ? scheme + "://" + location.host
+      : scheme + "://localhost";
+    var q = "?url=" + encodeURIComponent(t);
+    if (appId) q += "&app=" + encodeURIComponent(appId);
+    return new WebSocket(base + "/api/ws-proxy" + q);
+  }
+
   window.host = window.host || {};
   window.host.store = store;
   window.host.files = files;
   window.host.fetch = hostFetch;
   window.host.url = hostUrl;
+  window.host.connectWS = connectWS;
   window.host.__pegboard = {
     appId: appId,
     shim: !boot || boot.shim !== false

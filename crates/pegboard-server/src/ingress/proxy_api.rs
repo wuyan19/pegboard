@@ -155,6 +155,11 @@ impl From<ProxyError> for ApiError {
                 "重定向要求重放请求体（流式体不可重放）",
             ),
             ProxyError::Io(err) => ApiError::new(code::UPSTREAM_ERROR, 502, format!("io: {err}")),
+            ProxyError::WsUpgrade(msg) => ApiError::new(
+                code::UPSTREAM_ERROR,
+                502,
+                format!("WebSocket 升级失败: {msg}"),
+            ),
         }
     }
 }

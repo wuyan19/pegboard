@@ -44,6 +44,8 @@ pub enum ProxyError {
     TooLarge { size: u64, max: u64 },
     #[error("redirect with body cannot be replayed")]
     RedirectWithBody,
+    #[error("ws upgrade failed: {0}")]
+    WsUpgrade(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -244,6 +246,88 @@ impl Proxy {
     pub fn asset_url(&self, url: &Url) -> String {
         format!("/api/asset?url={}", urlencoding(url.as_str()))
     }
+
+    /// 建立到目标的 WebSocket 连接：校验（白名单 + SSRF + 限流）后升级。
+    /// 浏览器 WS 无法携带自定义头，extra_headers 仅服务端内部使用（当前为空）。
+    pub async fn connect_ws(&self, app: &AppMeta, url: Url) -> Result<WsConn, ProxyError> {
+        self.guard.check_target(app, Action::Ws, &url).await?;
+        self.guard.check_rate(app, Action::Ws)?;
+        let (stream, _response) = tokio_tungstenite::connect_async(url.as_str())
+            .await
+            .map_err(|e| ProxyError::WsUpgrade(e.to_string()))?;
+        Ok(WsConn { inner: stream })
+    }
+}
+
+/// WebSocket 连接抽象，避免泄露底层实现。
+pub struct WsConn {
+    inner: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+}
+
+#[derive(Debug, Clone)]
+pub enum WsMessage {
+    Text(String),
+    Binary(Bytes),
+    Ping(Bytes),
+    Pong(Bytes),
+    Close { code: u16, reason: String },
+}
+
+impl WsConn {
+    pub async fn send(&mut self, msg: WsMessage) -> Result<(), ProxyError> {
+        let inner = match msg {
+            WsMessage::Text(t) => tokio_tungstenite::tungstenite::Message::Text(t.into()),
+            WsMessage::Binary(b) => tokio_tungstenite::tungstenite::Message::Binary(b),
+            WsMessage::Ping(b) => tokio_tungstenite::tungstenite::Message::Ping(b),
+            WsMessage::Pong(b) => tokio_tungstenite::tungstenite::Message::Pong(b),
+            WsMessage::Close { code, reason } => tokio_tungstenite::tungstenite::Message::Close(
+                Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                    code: code.into(),
+                    reason: reason.into(),
+                }),
+            ),
+        };
+        use futures_util::SinkExt as _;
+        self.inner.send(inner).await.map_err(ws_err)
+    }
+
+    pub async fn recv(&mut self) -> Option<Result<WsMessage, ProxyError>> {
+        use futures_util::StreamExt as _;
+        let msg = self.inner.next().await?;
+        Some(msg.map(ws_msg).map_err(ws_err))
+    }
+
+    pub async fn close(mut self) -> Result<(), ProxyError> {
+        self.inner
+            .close(None)
+            .await
+            .map_err(|e| ProxyError::WsUpgrade(e.to_string()))
+    }
+}
+
+fn ws_msg(msg: tokio_tungstenite::tungstenite::Message) -> WsMessage {
+    use tokio_tungstenite::tungstenite::Message as M;
+    match msg {
+        M::Text(t) => WsMessage::Text(t.to_string()),
+        M::Binary(b) => WsMessage::Binary(b),
+        M::Ping(b) => WsMessage::Ping(b),
+        M::Pong(b) => WsMessage::Pong(b),
+        M::Close(Some(frame)) => WsMessage::Close {
+            code: u16::from(frame.code),
+            reason: frame.reason.to_string(),
+        },
+        M::Close(None) => WsMessage::Close {
+            code: 1005,
+            reason: String::new(),
+        },
+        M::Frame(_) => WsMessage::Binary(Bytes::new()),
+    }
+}
+
+fn ws_err(e: tokio_tungstenite::tungstenite::Error) -> ProxyError {
+    ProxyError::WsUpgrade(e.to_string())
 }
 
 /// query 参数编码（url crate 提供，form-urlencoded 语义）。
@@ -824,5 +908,110 @@ mod tests {
             out.extend_from_slice(&chunk?);
         }
         Ok(out)
+    }
+
+    // ---------- WebSocket ----------
+
+    use tokio_tungstenite::tungstenite::Message as TgMessage;
+
+    async fn spawn_ws_echo() -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    use futures_util::{SinkExt as _, StreamExt as _};
+                    let mut ws = match tokio_tungstenite::accept_async(socket).await {
+                        Ok(ws) => ws,
+                        Err(_) => return,
+                    };
+                    while let Some(Ok(msg)) = ws.next().await {
+                        match msg {
+                            TgMessage::Text(_) | TgMessage::Binary(_) | TgMessage::Ping(_) => {
+                                if ws.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            TgMessage::Close(frame) => {
+                                let _ = ws.send(TgMessage::Close(frame)).await;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    fn ws_app(entry: &str) -> AppMeta {
+        let mut a = app(&[]);
+        a.manifest.permissions.ws = vec![entry.to_owned()];
+        a
+    }
+
+    #[tokio::test]
+    async fn ws_echo_roundtrip() {
+        let addr = spawn_ws_echo().await;
+        let p = proxy(ProxyConfig::default());
+        let a = ws_app(&format!("ws://{addr}"));
+        let mut conn = p
+            .connect_ws(&a, Url::parse(&format!("ws://{addr}/")).unwrap())
+            .await
+            .unwrap();
+        conn.send(WsMessage::Text("hello-ws".into())).await.unwrap();
+        match conn.recv().await {
+            Some(Ok(WsMessage::Text(t))) => assert_eq!(t, "hello-ws"),
+            other => panic!("expected text echo, got {other:?}"),
+        }
+        conn.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ws_binary_frames_preserved() {
+        let addr = spawn_ws_echo().await;
+        let p = proxy(ProxyConfig::default());
+        let a = ws_app(&format!("ws://{addr}"));
+        let mut conn = p
+            .connect_ws(&a, Url::parse(&format!("ws://{addr}/")).unwrap())
+            .await
+            .unwrap();
+        let payload = Bytes::from_static(b"\x00\x01\x02binary");
+        conn.send(WsMessage::Binary(payload.clone())).await.unwrap();
+        match conn.recv().await {
+            Some(Ok(WsMessage::Binary(b))) => assert_eq!(b, payload),
+            other => panic!("expected binary echo, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ws_denied_target_rejected() {
+        let p = proxy(ProxyConfig::default());
+        let a = ws_app("ws://127.0.0.1:1");
+        let r = p
+            .connect_ws(&a, Url::parse("ws://127.0.0.2:2/").unwrap())
+            .await;
+        assert!(matches!(r, Err(ProxyError::Denied(_))));
+    }
+
+    #[tokio::test]
+    async fn ws_close_handshake() {
+        let addr = spawn_ws_echo().await;
+        let p = proxy(ProxyConfig::default());
+        let a = ws_app(&format!("ws://{addr}"));
+        let mut conn = p
+            .connect_ws(&a, Url::parse(&format!("ws://{addr}/")).unwrap())
+            .await
+            .unwrap();
+        // 先通信再关闭：验证关闭握手完成且不报错（echo 侧回 Close 帧）
+        conn.send(WsMessage::Text("before-close".into()))
+            .await
+            .unwrap();
+        let _ = conn.recv().await;
+        conn.close().await.unwrap();
     }
 }

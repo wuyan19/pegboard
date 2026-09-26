@@ -90,7 +90,7 @@ rust-version.workspace = true
 [dependencies]
 tokio = { workspace = true, features = ["net", "time"] }
 reqwest = { workspace = true, features = ["stream", "rustls", "json"] }
-tokio-tungstenite = { workspace = true, features = ["rustls", "tokio-rustls"] }
+tokio-tungstenite = { workspace = true, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 rusqlite = { workspace = true, features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -108,7 +108,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process"] }
 ```
 
 ### `crates/pegboard-server/Cargo.toml`
@@ -143,7 +143,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process"] }
 ```
 
 ### `crates/pegboard-cli/Cargo.toml`
@@ -172,9 +172,10 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "json", "stream"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process"] }
 futures-util = { workspace = true }
 url = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 ```
 
 ### `crates/pegboard-sdk/Cargo.toml`

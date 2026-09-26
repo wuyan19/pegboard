@@ -9,6 +9,7 @@ pub mod files_api;
 pub mod proxy_api;
 pub mod router;
 pub mod store_api;
+pub mod ws_api;
 
 use std::sync::Arc;
 

@@ -16,6 +16,7 @@ use crate::ingress::error::ApiError;
 use crate::ingress::files_api;
 use crate::ingress::proxy_api;
 use crate::ingress::store_api;
+use crate::ingress::ws_api;
 use crate::statics;
 
 /// 全进程共享状态。构造一次，注入所有 handler。
@@ -50,6 +51,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(store_api::routes())
         .merge(proxy_api::routes())
         .merge(files_api::routes())
+        .merge(ws_api::routes())
         .fallback(not_found_fallback)
         .with_state(state)
 }
