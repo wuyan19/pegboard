@@ -1,5 +1,5 @@
 [server]
-listen = "0.0.0.0:8787"
+listen = "127.0.0.1:8787"
 mode = "local"
 
 [identity]
@@ -17,3 +17,6 @@ sign_ttl_max = 86400
 [storage]
 data_root = "./data"
 apps_dir = "./apps"
+
+# 管理页鉴权（可选）：设置环境变量 PEGBOARD_ADMIN_TOKEN（≥16 字符）后，
+# 全部 /api/admin/* 端点要求 Authorization: Bearer <token>。lan 部署建议配置。
