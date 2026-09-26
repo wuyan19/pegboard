@@ -144,7 +144,7 @@ fn set_enabled(state: &Arc<AppState>, id: &str, enabled: bool) -> Result<Respons
         .host_db
         .app_states()
         .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("host.db: {e}")))?;
-    let installed_at = states.get(id).map(|s| s.1).copied().unwrap_or(0);
+    let installed_at = states.get(id).map_or(0, |s| s.1);
     Ok((StatusCode::OK, Json(view_of(&meta, enabled, installed_at))).into_response())
 }
 

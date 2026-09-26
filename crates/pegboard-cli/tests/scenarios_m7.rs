@@ -149,7 +149,7 @@ fn stop(mut child: Child) {
 #[tokio::test]
 async fn m7_three_scenario_apps() {
     // 1. mock 上游（ollama 聊天 + glm 额度）
-    let (mut mock_child, ollama_base, glm_base) = start_mocks();
+    let (mock_child, ollama_base, glm_base) = start_mocks();
     // 2. 暂存应用（两个清单白名单指向 mock）
     let (_staging, apps_dir) = staged_apps(&repo_root().join("apps"), &ollama_base, &glm_base);
     // 3. 起 pegboard
