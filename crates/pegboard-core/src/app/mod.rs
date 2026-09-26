@@ -7,6 +7,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub mod host_db;
+
+pub use host_db::{HostDb, HostDbError, SignedTokenRow};
+
 use crate::config::Limits;
 
 /// 应用清单，对应 apps/&lt;id&gt;/manifest.json。字段见 API 契约 §2。

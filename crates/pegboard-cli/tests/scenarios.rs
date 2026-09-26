@@ -249,3 +249,26 @@ async fn count_sse_events(response: reqwest::Response) -> usize {
     }
     count
 }
+
+#[tokio::test]
+async fn scenario_sdk_files_upload_download_sign() {
+    let (child, base, _root) = start_server(&[("filestest", r#"{"files":true}"#)]);
+    let out = Command::new("node")
+        .arg("tests/fixtures/sdk_files_scenario.js")
+        .arg(&base)
+        .arg(sdk_path())
+        .output()
+        .expect("run node scenario");
+    stop_server(child);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "node files scenario failed:\n{text}\nstatus: {:?}",
+        out.status.code()
+    );
+    assert!(text.contains("SDK-FILES-SCENARIO-OK"), "{text}");
+}

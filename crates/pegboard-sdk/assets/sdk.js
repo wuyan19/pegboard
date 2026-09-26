@@ -1,5 +1,5 @@
-// pegboard sdk.js — M4：host.store + host.fetch + fetch shim + host.url。
-// connectWS / files 随 M5-M6 提供。
+// pegboard sdk.js — M5：host.store + host.files + host.fetch + fetch shim + host.url。
+// connectWS 随 M6 提供。
 // 注入约定：宿主在本脚本之前注入
 //   <script>window.__PEGBOARD__ = { appId: "...", shim: true }</script>
 (function () {
@@ -193,8 +193,93 @@
     return headers;
   }
 
+  // ---- host.files：Blob 原语与签名（API 契约 §4.2）----
+
+  var files = {
+    upload: function (file) {
+      if (!file) return Promise.reject(fail("INVALID_REQUEST", "upload 需要文件"));
+      var name = file.name || "blob";
+      var mime = file.type || "application/octet-stream";
+      var form = new FormData();
+      form.append("file", file, name);
+      var path = "/api/files";
+      if (appId) {
+        // FormData 请求头由浏览器设置；身份头单独附加
+      }
+      return fetch(path, {
+        method: "POST",
+        headers: withAppHeader(null),
+        body: form
+      }).then(function (res) {
+        if (res.ok) return res.json();
+        return res.json().catch(function () { return {}; }).then(function (body) {
+          var e = (body && body.error) || {};
+          throw fail(e.code || "UPSTREAM_ERROR", e.message || res.statusText, e.detail);
+        });
+      });
+    },
+    get: function (id) {
+      return fetch("/api/files/" + encodeURIComponent(String(id)), {
+        headers: withAppHeader(null)
+      }).then(function (res) {
+        if (res.status === 404) return null;
+        if (res.ok) return res.blob();
+        return res.json().catch(function () { return {}; }).then(function (body) {
+          var e = (body && body.error) || {};
+          throw fail(e.code || "UPSTREAM_ERROR", e.message || res.statusText, e.detail);
+        });
+      });
+    },
+    url: function (id) {
+      return "/api/files/" + encodeURIComponent(String(id));
+    },
+    sign: function (id, ttlSec) {
+      return fetch("/api/files/" + encodeURIComponent(String(id)) + "/sign", {
+        method: "POST",
+        headers: withAppHeader({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ ttl: ttlSec })
+      }).then(function (res) {
+        if (res.ok) return res.json();
+        return res.json().catch(function () { return {}; }).then(function (body) {
+          var e = (body && body.error) || {};
+          throw fail(e.code || "UPSTREAM_ERROR", e.message || res.statusText, e.detail);
+        });
+      }).then(function (body) { return body.url; });
+    },
+    list: function (opts) {
+      opts = opts || {};
+      var q = [];
+      if (opts.prefix !== undefined && opts.prefix !== null) q.push("prefix=" + encodeURIComponent(String(opts.prefix)));
+      if (opts.cursor) q.push("cursor=" + encodeURIComponent(String(opts.cursor)));
+      if (opts.limit) q.push("limit=" + encodeURIComponent(Number(opts.limit)));
+      var qs = q.length ? "?" + q.join("&") : "";
+      return fetch("/api/files" + qs, {
+        headers: withAppHeader(null)
+      }).then(function (res) {
+        if (res.ok) return res.json();
+        return res.json().catch(function () { return {}; }).then(function (body) {
+          var e = (body && body.error) || {};
+          throw fail(e.code || "UPSTREAM_ERROR", e.message || res.statusText, e.detail);
+        });
+      });
+    },
+    delete: function (id) {
+      return fetch("/api/files/" + encodeURIComponent(String(id)), {
+        method: "DELETE",
+        headers: withAppHeader(null)
+      }).then(function (res) {
+        if (res.ok || res.status === 204) return undefined;
+        return res.json().catch(function () { return {}; }).then(function (body) {
+          var e = (body && body.error) || {};
+          throw fail(e.code || "UPSTREAM_ERROR", e.message || res.statusText, e.detail);
+        });
+      });
+    }
+  };
+
   window.host = window.host || {};
   window.host.store = store;
+  window.host.files = files;
   window.host.fetch = hostFetch;
   window.host.url = hostUrl;
   window.host.__pegboard = {

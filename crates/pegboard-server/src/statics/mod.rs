@@ -460,6 +460,9 @@ mod tests {
         })
         .expect("auditor")
         .handle();
+        let host_db =
+            pegboard_core::app::HostDb::open(&root.path().join("data/host.db")).expect("host db");
+        let signer = Arc::new(pegboard_core::files::Signer::new(Arc::new(host_db)));
         let limits = config.limits;
         let proxy = pegboard_core::proxy::Proxy::new(
             Arc::new(pegboard_core::guard::Guard::new()),
@@ -473,6 +476,11 @@ mod tests {
                 root.path().join("data/apps_data"),
                 limits,
             ),
+            files: pegboard_core::files::FilesManager::new(
+                root.path().join("data/apps_data"),
+                root.path().join("data/tmp"),
+            ),
+            signer: Arc::clone(&signer),
             proxy: Arc::new(proxy),
             config,
             apps: std::sync::RwLock::new(outcome.registry),

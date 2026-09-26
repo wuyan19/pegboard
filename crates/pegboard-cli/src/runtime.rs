@@ -59,10 +59,18 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
         pegboard_core::proxy::ProxyConfig::default(),
     )
     .map_err(|e| format!("构造代理器失败: {e}"))?;
+    let host_db = pegboard_core::app::HostDb::open(&data_root.join("host.db"))
+        .map_err(|e| format!("打开 host.db 失败: {e}"))?;
+    let signer = Arc::new(pegboard_core::files::Signer::new(Arc::new(host_db)));
     let state = Arc::new(AppState {
         identity: pegboard_core::identity::Identity::new(&config.identity),
         guard,
         stores: pegboard_core::store::StoreManager::new(data_root.join("apps_data"), config.limits),
+        files: pegboard_core::files::FilesManager::new(
+            data_root.join("apps_data"),
+            data_root.join("tmp"),
+        ),
+        signer: Arc::clone(&signer),
         proxy: Arc::new(proxy),
         config: config.clone(),
         apps: RwLock::new(outcome.registry),

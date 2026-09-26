@@ -1,4 +1,4 @@
-// pegboard sdk.d.ts — M3：store 类型。files / fetch / connectWS / url 随 M4-M6 提供。
+// pegboard sdk.d.ts — M5：store / files / fetch / url 类型。connectWS 随 M6 提供。
 declare namespace Pegboard {
   interface HostError extends Error {
     code:
@@ -27,8 +27,31 @@ declare namespace Pegboard {
     batch(ops: { op: "set" | "delete"; key: string; value?: unknown }[]): Promise<void>;
   }
 
+  interface FileMeta {
+    id: string;
+    name: string;
+    size: number;
+    mime: string;
+    created: number;
+  }
+
+  interface Files {
+    upload(file: Blob | File): Promise<Omit<FileMeta, "created">>;
+    get(id: string): Promise<Blob | null>;
+    url(id: string): string;
+    sign(id: string, ttlSec: number): Promise<string>;
+    list(opts?: { prefix?: string; cursor?: string; limit?: number }): Promise<{
+      items: FileMeta[];
+      next: string | null;
+    }>;
+    delete(id: string): Promise<void>;
+  }
+
   interface Host {
     store: Store;
+    files: Files;
+    fetch(url: string, options?: RequestInit): Promise<Response>;
+    url(url: string): string;
     __pegboard?: { appId: string | null; shim: boolean };
   }
 }

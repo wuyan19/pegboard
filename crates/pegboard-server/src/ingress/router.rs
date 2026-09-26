@@ -13,6 +13,7 @@ use pegboard_core::proxy::Proxy;
 use pegboard_core::store::StoreManager;
 
 use crate::ingress::error::ApiError;
+use crate::ingress::files_api;
 use crate::ingress::proxy_api;
 use crate::ingress::store_api;
 use crate::statics;
@@ -27,6 +28,8 @@ pub struct AppState {
     pub guard: Arc<Guard>,
     pub stores: StoreManager,
     pub proxy: Arc<Proxy>,
+    pub files: pegboard_core::files::FilesManager,
+    pub signer: Arc<pegboard_core::files::Signer>,
 }
 
 impl AppState {
@@ -46,6 +49,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(statics::routes())
         .merge(store_api::routes())
         .merge(proxy_api::routes())
+        .merge(files_api::routes())
         .fallback(not_found_fallback)
         .with_state(state)
 }

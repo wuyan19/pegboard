@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
+use axum::http::HeaderMap;
 
 use pegboard_core::app::AppMeta;
 use pegboard_core::identity::{IdentityError, Request as IdentityRequest, Subject};
@@ -51,6 +52,42 @@ impl FromRequestParts<Arc<AppState>> for RequestContext {
 
 /// 从请求头解析 app_id（应用身份不得来自请求体）。
 pub fn resolve_app_id(parts: &Parts) -> Option<String> {
+    app_id_from_headers(&parts.headers)
+}
+
+/// 从 HeaderMap 解析 app_id。
+pub fn app_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(APP_HEADER)?
+        .to_str()
+        .ok()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+/// 手工构造上下文（handler 内已消费 extractor 输入时使用）。
+pub fn manual_context(
+    state: &crate::ingress::AppState,
+    headers: &HeaderMap,
+) -> Result<RequestContext, ApiError> {
+    let app_id = app_id_from_headers(headers)
+        .ok_or_else(|| ApiError::invalid_request(format!("缺少应用身份头 `{APP_HEADER}`")))?;
+    let app = state.app_meta(&app_id)?;
+    let req = IdentityRequest {
+        headers,
+        peer: None,
+    };
+    let subject = state.identity.resolve(&req).map_err(identity_error)?;
+    Ok(RequestContext {
+        app,
+        subject,
+        started_at: Instant::now(),
+    })
+}
+
+#[allow(dead_code)]
+fn unused(parts: &Parts) -> Option<String> {
     parts
         .headers
         .get(APP_HEADER)?
@@ -71,6 +108,6 @@ fn identity_request(parts: &Parts) -> IdentityRequest<'_> {
 
 /// 身份错误映射：PERMISSION_DENIED + 401（仅 token / forwarded 模式出现；
 /// v1 固定模式不产生 401 路径，见 API 契约 §6）。
-fn identity_error(e: IdentityError) -> ApiError {
+pub(crate) fn identity_error(e: IdentityError) -> ApiError {
     ApiError::new(code::PERMISSION_DENIED, 401, format!("身份解析失败: {e}"))
 }

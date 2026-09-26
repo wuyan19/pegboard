@@ -6,6 +6,7 @@
 pub mod app;
 pub mod audit;
 pub mod config;
+pub mod files;
 pub mod guard;
 pub mod identity;
 pub mod proxy;
