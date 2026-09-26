@@ -16,6 +16,8 @@
   @media (prefers-color-scheme: dark) { table { background: #1e1e21; } }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(128,128,128,.2); font-size: 13px; vertical-align: top; }
   th { font-weight: 600; color: #666; font-size: 12px; }
+  tbody tr.clickable { cursor: pointer; }
+  tbody tr.clickable:hover { background: rgba(10,132,255,.06); }
   code, .mono { font-family: ui-monospace, monospace; font-size: 12px; }
   a { color: #0a84ff; text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -24,19 +26,34 @@
   .off { background: #f3d6d6; color: #7f1d1d; }
   .warn { background: #fdeccc; color: #7c4a03; }
   .err { background: #f3d6d6; color: #7f1d1d; }
+  .dim { background: rgba(128,128,128,.18); color: inherit; }
   @media (prefers-color-scheme: dark) {
     .ok { background: #14351f; color: #7ee2a8; }
     .off, .err { background: #3d1a1a; color: #f0a3a3; }
     .warn { background: #3d2a10; color: #f5c67a; }
+    .dim { background: rgba(128,128,128,.25); }
   }
   button, select, input { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; }
   button { cursor: pointer; }
-  button:hover { background: rgba(128,128,128,.12); }
+  button:hover:not(:disabled) { background: rgba(128,128,128,.12); }
+  button:disabled { opacity: .4; cursor: default; }
   .muted { color: #888; }
   #status { font-size: 12px; color: #888; }
   .usage-bar { height: 6px; background: rgba(128,128,128,.2); border-radius: 3px; width: 140px; display: inline-block; vertical-align: middle; margin-right: 6px; }
   .usage-fill { height: 100%; border-radius: 3px; background: #0a84ff; }
-  tr.detail > td { background: rgba(128,128,128,.06); }
+  /* 模态框 */
+  #modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; }
+  #modal[hidden] { display: none; }
+  #modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.45); }
+  #modal-card { position: relative; width: 640px; max-width: 100%; max-height: 80vh; overflow-y: auto; background: var(--card, #fff); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.25); }
+  @media (prefers-color-scheme: dark) { #modal-card { background: #1e1e21; } }
+  #modal-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid rgba(128,128,128,.2); position: sticky; top: 0; background: inherit; border-radius: 12px 12px 0 0; }
+  #modal-body { padding: 14px 18px 18px; }
+  #modal-body h3 { font-size: 13px; margin: 14px 0 6px; color: #666; }
+  #modal-body h3:first-child { margin-top: 0; }
+  .kv-table { width: 100%; }
+  .kv-table td { padding: 4px 8px 4px 0; border: none; font-size: 13px; }
+  .kv-table td:first-child { color: #888; width: 96px; }
 </style>
 </head>
 <body>
@@ -50,10 +67,10 @@
   <span class="muted" id="install-msg">按清单校验后注册；失败会显示原因</span>
 </div>
 <table id="apps">
-  <thead><tr><th>ID</th><th>名称</th><th>状态</th><th>权限</th><th>限额（生效）</th><th>操作</th></tr></thead>
-  <tbody id="apps-body"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+  <thead><tr><th>应用</th><th>状态</th><th>操作</th></tr></thead>
+  <tbody id="apps-body"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody>
 </table>
-<div class="sub">禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问；卸载删除该应用的数据目录与签名 token，产物目录保留。</div>
+<div class="sub">点击行查看详情 · 禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问 · 卸载删除数据目录与签名 token，产物目录保留。</div>
 
 <h2>审计日志</h2>
 <div class="sub">能力调用事件（静态访问不入审计）。</div>
@@ -68,15 +85,29 @@
     <option value="">全部结果</option>
     <option>Ok</option><option>Denied</option><option>Error</option>
   </select>
-  <select id="f-limit" title="条数上限">
-    <option>100</option><option>500</option><option>1000</option>
+  <select id="f-limit" title="每页条数">
+    <option>20</option><option selected>50</option><option>100</option><option>200</option>
   </select>
-  <button id="more" hidden>加载更早</button>
+  <span class="muted" id="log-page"></span>
+  <button id="logs-prev" title="更新的事件" disabled>← 较新</button>
+  <button id="logs-next" title="更早的事件" disabled>较旧 →</button>
 </div>
 <table id="logs">
   <thead><tr><th>时间</th><th>应用</th><th>subject</th><th>动作</th><th>目标</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead>
   <tbody id="logs-body"><tr><td colspan="8" class="muted">加载中…</td></tr></tbody>
 </table>
+
+<!-- 应用详情模态框 -->
+<div id="modal" hidden>
+  <div id="modal-backdrop"></div>
+  <div id="modal-card">
+    <div id="modal-head">
+      <strong id="modal-title"></strong>
+      <button id="modal-close" title="关闭 (Esc)">✕</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -133,9 +164,11 @@ function errorRow(cols, e, retry) {
   return tr;
 }
 
-// ---------- 应用 ----------
+// ---------- 应用列表 ----------
 
 let appsCache = [];
+
+const STATE_LABEL = { enabled: "启用", disabled: "禁用" };
 
 async function loadApps() {
   if (appsInFlight) return;
@@ -146,45 +179,36 @@ async function loadApps() {
     tbody.innerHTML = "";
     if (!appsCache.length) {
       setBody("#apps-body",
-        '<tr><td colspan="6" class="muted">没有已注册应用；把应用放进 apps/ 目录后，在上方输入 id 安装</td></tr>');
+        '<tr><td colspan="3" class="muted">没有已注册应用；把应用放进 apps/ 目录后，在上方输入 id 安装</td></tr>');
     }
     for (const a of appsCache) {
       const tr = document.createElement("tr");
-      const perms = [
-        a.permissions.store && "store",
-        a.permissions.files && "files",
-        a.permissions.net.length && "net: " + a.permissions.net.join(", "),
-        a.permissions.ws.length && "ws: " + a.permissions.ws.join(", "),
-        "shim: " + a.permissions.shim,
-      ].filter(Boolean);
-      const limits = [
-        "kv " + fmtBytes(a.limits.kv_value_bytes) + " / " + fmtBytes(a.limits.kv_total_bytes),
-        "file " + fmtBytes(a.limits.file_bytes) + " / " + fmtBytes(a.limits.file_total_bytes),
-        a.limits.net_rps + " rps",
-      ];
+      tr.className = "clickable";
+      tr.dataset.id = a.id;
+      const label = STATE_LABEL[a.state] || a.state;
+      const pillClass = a.state === "enabled" ? "ok" : a.state === "disabled" ? "off" : "dim";
       tr.innerHTML =
-        "<td><code>" + esc(a.id) + "</code></td>" +
         "<td><a href=\"/apps/" + esc(a.id) + "/\" target=\"_blank\" title=\"打开应用\">" + esc(a.name) + "</a>" +
+        ' <code class="muted">' + esc(a.id) + "</code>" +
         '<div class="mono muted">' + esc(a.entry) + "</div></td>" +
-        '<td><span class="pill ' + (a.enabled ? "ok" : "off") + '">' + (a.enabled ? "启用" : "禁用") + "</span></td>" +
-        '<td class="mono">' + perms.map(esc).join("<br>") + "</td>" +
-        '<td class="mono">' + limits.map(esc).join("<br>") + "</td>" +
+        '<td><span class="pill ' + pillClass + '">' + esc(label) + "</span></td>" +
         "<td>" +
-          '<button data-id="' + esc(a.id) + '" data-act="' + (a.enabled ? "disable" : "enable") + '" title="' +
-            (a.enabled ? "禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问" : "恢复能力 API 访问") + '">' +
-            (a.enabled ? "禁用" : "启用") + "</button> " +
-          '<button data-id="' + esc(a.id) + '" data-act="uninstall" title="删除数据目录与签名 token，产物目录保留">卸载</button> ' +
-          '<button data-id="' + esc(a.id) + '" data-act="usage" title="实际用量 vs 限额">用量</button>' +
+          (a.state === "enabled"
+            ? '<button data-act="disable" title="禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问">禁用</button> '
+            : a.state === "disabled"
+              ? '<button data-act="enable" title="恢复能力 API 访问">启用</button> '
+              : "")
+          + '<button data-act="uninstall" title="注销应用：删除数据目录与签名 token，产物目录保留">卸载</button>' +
         "</td>";
       tbody.appendChild(tr);
     }
     tbody.querySelectorAll("button[data-act]").forEach((b) => {
-      b.addEventListener("click", async () => {
-        const id = b.getAttribute("data-id");
+      b.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const id = b.closest("tr").dataset.id;
         const act = b.getAttribute("data-act");
-        if (act === "usage") return toggleUsage(b, id);
         if (act === "uninstall" &&
-            !confirm("卸载 " + id + "：删除其数据目录与签名 token，产物目录保留。继续？")) return;
+            !confirm("卸载 " + id + "：注销应用并删除其数据目录与签名 token，产物目录保留。继续？")) return;
         try {
           await j("/api/admin/apps/" + encodeURIComponent(id) + "/" + act, { method: "POST" });
           await refreshAll();
@@ -202,7 +226,7 @@ async function loadApps() {
     $("status").textContent = "更新于 " + new Date().toLocaleTimeString();
   } catch (e) {
     setBody("#apps-body", "");
-    $("apps-body").appendChild(errorRow(6, e, loadApps));
+    $("apps-body").appendChild(errorRow(3, e, loadApps));
     $("status").textContent = "刷新失败";
   } finally {
     appsInFlight = false;
@@ -227,7 +251,7 @@ $("install-id").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter") $("install").click();
 });
 
-// ---------- 用量详情 ----------
+// ---------- 应用详情模态框 ----------
 
 function usageLine(label, used, max, count, unit) {
   const pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
@@ -241,47 +265,78 @@ function usageLine(label, used, max, count, unit) {
   );
 }
 
-async function toggleUsage(button, id) {
-  const row = button.closest("tr");
-  const existing = row.nextElementSibling;
-  if (existing && existing.classList.contains("detail")) {
-    existing.remove();
-    return;
-  }
-  const detail = document.createElement("tr");
-  detail.className = "detail";
-  detail.innerHTML = '<td colspan="6" class="muted">读取用量中…</td>';
-  row.after(detail);
+async function openModal(id) {
+  $("modal-title").textContent = id;
+  $("modal-body").innerHTML = '<div class="muted">读取详情中…</div>';
+  $("modal").hidden = false;
   try {
     const d = await j("/api/admin/apps/" + encodeURIComponent(id));
-    detail.innerHTML =
-      '<td colspan="6">' +
+    const label = STATE_LABEL[d.state] || d.state || "—";
+    const perms = [
+      ["store", d.permissions.store], ["files", d.permissions.files],
+      ["shim", d.permissions.shim],
+    ].map(([k, v]) => k + ": " + v)
+     .concat(
+       d.permissions.net.length ? ["net: " + d.permissions.net.join(", ")] : [],
+       d.permissions.ws.length ? ["ws: " + d.permissions.ws.join(", ")] : []
+     );
+    $("modal-title").textContent = d.name + "（" + d.id + "）";
+    $("modal-body").innerHTML =
+      '<table class="kv-table">' +
+      '<tr><td>状态</td><td><span class="pill ' + (d.state === "enabled" ? "ok" : "off") + '">' + esc(label) + "</span></td></tr>" +
+      '<tr><td>入口</td><td class="mono">' + esc(d.entry) +
+        ' <a href="/apps/' + esc(d.id) + '/" target="_blank">打开 ↗</a></td></tr>' +
+      '<tr><td>安装时间</td><td>' + (d.installed_at ? esc(new Date(d.installed_at).toLocaleString()) : "—") + "</td></tr>" +
+      '<tr><td>产物目录</td><td class="mono">' + esc(d.root) + "</td></tr>" +
+      '<tr><td>数据目录</td><td class="mono">' + esc(d.data_dir) + "</td></tr>" +
+      "</table>" +
+      "<h3>权限</h3><div class=\"mono\">" + perms.map(esc).join("<br>") + "</div>" +
+      "<h3>限额（生效）</h3><div class=\"mono\">" +
+        esc("kv " + fmtBytes(d.limits.kv_value_bytes) + " / " + fmtBytes(d.limits.kv_total_bytes) +
+          " · file " + fmtBytes(d.limits.file_bytes) + " / " + fmtBytes(d.limits.file_total_bytes) +
+          " · " + d.limits.net_rps + " rps · sign_ttl " + d.limits.sign_ttl_max + "s") + "</div>" +
+      "<h3>实际用量</h3>" +
       usageLine("KV　", d.usage.kv.bytes, d.limits.kv_total_bytes, d.usage.kv.keys, "键") +
-      usageLine("文件", d.usage.files.bytes, d.limits.file_total_bytes, d.usage.files.count, "个") +
-      "</td>";
+      usageLine("文件", d.usage.files.bytes, d.limits.file_total_bytes, d.usage.files.count, "个");
   } catch (e) {
-    detail.innerHTML =
-      '<td colspan="6"><span class="pill err">' + esc(e.code || "ERROR") + "</span> " +
-      esc(e.message || e) + "</td>";
+    $("modal-body").innerHTML =
+      '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
   }
 }
 
-// ---------- 审计日志 ----------
+function closeModal() {
+  $("modal").hidden = true;
+}
+$("modal-close").addEventListener("click", closeModal);
+$("modal-backdrop").addEventListener("click", closeModal);
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && !$("modal").hidden) closeModal();
+});
+
+// ---------- 审计日志（双向分页）----------
 
 const OUTCOME_CLASS = { Ok: "ok", Denied: "warn", Error: "err" };
+// 分页状态：before/after 固定当前页位置；page 仅用于展示
+const logs = { page: 1, before: null, after: null, next: null, prev: null, items: [] };
 
-// 日志状态：accumulated 为倒序累积条目；游标变化（过滤/刷新）即重置
-let logItems = [];
-let logNext = null;
+function logQuery() {
+  const q = new URLSearchParams();
+  if ($("f-app").value) q.set("app", $("f-app").value);
+  if ($("f-action").value) q.set("action", $("f-action").value);
+  if ($("f-outcome").value) q.set("outcome", $("f-outcome").value);
+  q.set("limit", $("f-limit").value);
+  if (logs.before) q.set("before", logs.before);
+  if (logs.after) q.set("after", logs.after);
+  return q.toString();
+}
 
 function renderLogs() {
   const tbody = $("logs-body");
   tbody.innerHTML = "";
-  if (!logItems.length) {
+  if (!logs.items.length) {
     setBody("#logs-body", '<tr><td colspan="8" class="muted">暂无事件（过滤条件或时间范围内没有能力调用）</td></tr>');
-    return;
   }
-  for (const e of logItems) {
+  for (const e of logs.items) {
     const tr = document.createElement("tr");
     tr.innerHTML =
       '<td class="muted" title="' + esc(new Date(e.ts).toLocaleString()) + '">' + esc(relTime(e.ts)) + "</td>" +
@@ -294,44 +349,48 @@ function renderLogs() {
       "<td>" + esc(e.duration_ms) + " ms</td>";
     tbody.appendChild(tr);
   }
+  $("log-page").textContent = "第 " + logs.page + " 页";
+  $("logs-next").disabled = !logs.next;
+  $("logs-prev").disabled = !logs.prev;
 }
 
-async function loadLogs(loadMore) {
+async function loadLogs() {
   if (logsInFlight) return;
   logsInFlight = true;
   try {
-    const q = new URLSearchParams();
-    if ($("f-app").value) q.set("app", $("f-app").value);
-    if ($("f-action").value) q.set("action", $("f-action").value);
-    if ($("f-outcome").value) q.set("outcome", $("f-outcome").value);
-    q.set("limit", $("f-limit").value);
-    if (loadMore && logNext) q.set("cursor", logNext);
-    const page = await j("/api/admin/logs?" + q.toString());
-    const items = page.items || [];
-    logItems = loadMore ? logItems.concat(items) : items;
-    logNext = page.next || null;
+    const page = await j("/api/admin/logs?" + logQuery());
+    logs.items = page.items || [];
+    logs.next = page.next || null;
+    logs.prev = page.prev || null;
     renderLogs();
-    $("more").hidden = !logNext;
-    $("more").disabled = false;
-    $("more").textContent = "加载更早";
   } catch (e) {
     setBody("#logs-body", "");
-    $("logs-body").appendChild(errorRow(8, e, () => loadLogs(loadMore)));
+    $("logs-body").appendChild(errorRow(8, e, loadLogs));
   } finally {
     logsInFlight = false;
   }
 }
 
-$("more").addEventListener("click", () => {
-  $("more").disabled = true;
-  $("more").textContent = "加载中…";
-  loadLogs(true);
+$("logs-next").addEventListener("click", () => {
+  if (!logs.next) return;
+  logs.before = logs.next;
+  logs.after = null;
+  logs.page += 1;
+  loadLogs();
 });
-
+$("logs-prev").addEventListener("click", () => {
+  if (!logs.prev) return;
+  logs.after = logs.prev;
+  logs.before = null;
+  logs.page = Math.max(1, logs.page - 1);
+  loadLogs();
+});
 for (const id of ["f-app", "f-action", "f-outcome", "f-limit"]) {
   $(id).addEventListener("change", () => {
-    logNext = null;
-    loadLogs(false);
+    logs.page = 1;
+    logs.before = null;
+    logs.after = null;
+    loadLogs();
   });
 }
 
@@ -340,16 +399,15 @@ for (const id of ["f-app", "f-action", "f-outcome", "f-limit"]) {
 let appsInFlight = false;
 let logsInFlight = false;
 
-async function loadStatus() {
-  try {
-    const s = await j("/api/admin/status");
+function loadStatus() {
+  j("/api/admin/status").then((s) => {
     $("server-info").textContent =
       "v" + s.version + " · " + s.mode + " · " + s.listen +
       " · 运行 " + Math.round(s.uptime_secs / 60) + " 分钟" +
       (s.audit_dropped ? " · 审计丢弃 " + s.audit_dropped : "");
-  } catch (_) {
+  }).catch(() => {
     $("server-info").textContent = "";
-  }
+  });
 }
 
 async function refreshAll() {
@@ -358,8 +416,21 @@ async function refreshAll() {
 
 $("refresh").addEventListener("click", refreshAll);
 setInterval(() => {
-  if (document.visibilityState === "visible" && !appsInFlight && !logsInFlight) refreshAll();
+  if (document.visibilityState !== "visible" || appsInFlight || logsInFlight) return;
+  // 停留在第 1 页时才自动刷新日志（翻页中游标固定位置，避免跳动）
+  if (logs.page === 1) {
+    Promise.allSettled([loadApps(), loadLogs(), loadStatus()]);
+  } else {
+    loadApps();
+  }
 }, 10_000);
+
+// 行点击打开详情
+$("apps-body").addEventListener("click", (ev) => {
+  if (ev.target.closest("button") || ev.target.closest("a")) return;
+  const tr = ev.target.closest("tr[data-id]");
+  if (tr) openModal(tr.dataset.id);
+});
 
 refreshAll();
 </script>

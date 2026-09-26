@@ -84,13 +84,16 @@ async fn admin_page_browser_smoke() {
     write_app(&apps, "lan-share", r#"{"files":true}"#);
     // 触发一条 Denied 审计事件：未授权能力调用（lan-share 无 store）
     let (_root, child, base) = start_server(&apps);
+    // 造 25 条 Denied 审计事件（lan-share 未声明 store），让 20/页 有第二页
     let client = reqwest::Client::new();
-    let _ = client
-        .get(format!("{base}/api/store/kv/x"))
-        .header("x-pegboard-app", "lan-share")
-        .send()
-        .await
-        .expect("trigger denied event");
+    for _ in 0..25 {
+        let _ = client
+            .get(format!("{base}/api/store/kv/x"))
+            .header("x-pegboard-app", "lan-share")
+            .send()
+            .await
+            .expect("trigger denied event");
+    }
 
     let out = tokio::process::Command::new("node")
         .arg("tests/e2e/admin_smoke.js")

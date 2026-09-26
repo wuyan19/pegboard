@@ -59,8 +59,10 @@ pub struct Filter {
     pub outcome: Option<Outcome>,
     pub since: Option<i64>,
     pub until: Option<i64>,
-    /// 游标 (ts, seq)：返回严格更早（ts 更小，或相同 ts 中 seq 更小）的事件
-    pub cursor: Option<(i64, u64)>,
+    /// 倒向游标 (ts, seq)：只取严格更早（ts 更小，或相同 ts 中 seq 更小）的事件
+    pub before: Option<(i64, u64)>,
+    /// 正向游标 (ts, seq)：只取严格更晚的事件（返回其中最旧的 limit 条）
+    pub after: Option<(i64, u64)>,
     /// 默认 200，上限 1000
     pub limit: Option<u32>,
 }
@@ -93,14 +95,30 @@ impl Filter {
         if self.until.is_some_and(|u| e.ts > u) {
             return false;
         }
-        if let Some((cursor_ts, cursor_seq)) = self.cursor {
-            // 倒序分页：只取严格早于游标的事件
+        if let Some((cursor_ts, cursor_seq)) = self.before {
+            // 倒向分页：只取严格早于游标的事件
             if !(e.ts < cursor_ts || (e.ts == cursor_ts && e.seq < cursor_seq)) {
+                return false;
+            }
+        }
+        if let Some((cursor_ts, cursor_seq)) = self.after {
+            // 正向分页：只取严格晚于游标的事件
+            if !(e.ts > cursor_ts || (e.ts == cursor_ts && e.seq > cursor_seq)) {
                 return false;
             }
         }
         true
     }
+}
+
+/// 分页查询结果。items 始终按 (ts, seq) 倒序（新 → 旧）。
+#[derive(Debug, Clone)]
+pub struct AuditPage {
+    pub items: Vec<AuditEvent>,
+    /// 是否存在更早事件（用最后一项作 before 游标续页）
+    pub has_older: bool,
+    /// 是否存在更新事件（用第一项作 after 游标续页）
+    pub has_newer: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -194,9 +212,14 @@ impl AuditorHandle {
         self.shared.dropped.load(Ordering::Relaxed)
     }
 
-    /// 查询：从滚动日志读取并过滤，按时间倒序（与 Auditor::query 同语义）。
+    /// 分页查询（与 Auditor::query_page 同语义）。
+    pub fn query_page(&self, filter: &Filter) -> Result<AuditPage, AuditError> {
+        query_page_files(&self.shared.config, filter)
+    }
+
+    /// 查询：从滚动日志读取并过滤，按时间倒序返回。
     pub fn query(&self, filter: &Filter) -> Result<Vec<AuditEvent>, AuditError> {
-        query_files(&self.shared.config, filter)
+        Ok(self.query_page(filter)?.items)
     }
 }
 
@@ -253,10 +276,14 @@ impl Auditor {
         Ok(())
     }
 
+    /// 分页查询：items 倒序；has_older / has_newer 供双向续页。
+    pub fn query_page(&self, filter: &Filter) -> Result<AuditPage, AuditError> {
+        query_page_files(&self.config, filter)
+    }
+
     /// 查询：从滚动日志读取并过滤，按时间倒序返回。
-    /// 只读最近 max_files 份，不做全量扫描。
     pub fn query(&self, filter: &Filter) -> Result<Vec<AuditEvent>, AuditError> {
-        query_files(&self.config, filter)
+        Ok(self.query_page(filter)?.items)
     }
 
     /// 队列中被丢弃的事件总数，用于自监控。
@@ -334,30 +361,57 @@ fn rotate(dir: &Path, name: &str, max_files: u32) -> Result<(), AuditError> {
     Ok(())
 }
 
-/// 文件级查询实现：读最近 max_files 份，过滤后按 ts 降序截断。
-fn query_files(config: &AuditConfig, filter: &Filter) -> Result<Vec<AuditEvent>, AuditError> {
+/// 文件级分页查询。文件序列新 → 旧，文件内时间升序，文件间严格按时间分界。
+///
+/// - before / 无游标：倒向取最新的 limit 条；按文件粒度早停（攒够 limit+1 即停）。
+/// - after：正向取距游标最近的 limit 条（最旧的若干条），需全量扫描。
+fn query_page_files(config: &AuditConfig, filter: &Filter) -> Result<AuditPage, AuditError> {
     let limit = filter.limit();
     let mut files = vec![config.log_dir.join(&config.file_name)];
     for i in 1..config.max_files.max(1) {
         files.push(config.log_dir.join(format!("{}.{}", config.file_name, i)));
     }
     files.retain(|p| p.is_file());
-    let mut out = Vec::new();
+
+    let after_mode = filter.after.is_some() && filter.before.is_none();
+    let mut matched: Vec<AuditEvent> = Vec::new();
     for path in files {
         let file = File::open(&path)?;
         for line in BufReader::new(file).lines() {
             let line = line?;
             if let Some(event) = decode(&line) {
                 if filter.matches(&event) {
-                    out.push(event);
+                    matched.push(event);
                 }
             }
         }
+        // 倒向模式：已处理文件包含最新的全部命中，攒够 limit+1 即可判定 has_older
+        if !after_mode && matched.len() > limit {
+            break;
+        }
     }
-    // 文件序列新 → 旧，文件内时间升序；整体按 ts 降序（稳定排序保留新文件优先）
-    out.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.seq.cmp(&a.seq)));
-    out.truncate(limit);
-    Ok(out)
+
+    if after_mode {
+        // 正向：升序取最旧的 limit 条（紧随游标之后的一段），超出部分即 has_newer
+        matched.sort_by(|a, b| a.ts.cmp(&b.ts).then_with(|| a.seq.cmp(&b.seq)));
+        let has_newer = matched.len() > limit;
+        matched.truncate(limit);
+        matched.reverse();
+        Ok(AuditPage {
+            items: matched,
+            has_older: true, // 游标本身即更早事件
+            has_newer,
+        })
+    } else {
+        matched.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.seq.cmp(&a.seq)));
+        let has_older = matched.len() > limit;
+        matched.truncate(limit);
+        Ok(AuditPage {
+            items: matched,
+            has_older,
+            has_newer: filter.before.is_some(),
+        })
+    }
 }
 
 /// 单条编码上限 4 KiB：超长截断 target。
@@ -583,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn seq_assigned_on_record_and_cursor_pages() {
+    fn seq_assigned_on_record_and_bidirectional_paging() {
         let d = TempDir::new().unwrap();
         let a = Auditor::start(cfg(&d)).unwrap();
         // 10 条同毫秒事件：seq 是唯一稳定次序键
@@ -598,50 +652,63 @@ mod tests {
         let a2 = Auditor::start(cfg(&d)).unwrap();
         // 第一页：最新 3 条（seq 9,8,7）
         let p1 = a2
-            .query(&Filter {
+            .query_page(&Filter {
                 limit: Some(3),
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(p1.len(), 3);
-        assert_eq!(p1[0].seq, 9);
-        assert_eq!(p1[2].seq, 7);
+        assert_eq!(p1.items.len(), 3);
+        assert_eq!(p1.items[0].seq, 9);
+        assert_eq!(p1.items[2].seq, 7);
+        assert!(p1.has_older);
+        assert!(!p1.has_newer);
 
-        // 以 (ts, seq) 为游标取下一页：严格更早，无重叠
+        // before：取更早一页（seq 6,5,4），无重叠
         let p2 = a2
-            .query(&Filter {
-                cursor: Some((p1[2].ts, p1[2].seq)),
+            .query_page(&Filter {
+                before: Some((p1.items[2].ts, p1.items[2].seq)),
                 limit: Some(3),
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(p2.len(), 3);
-        assert_eq!(p2[0].seq, 6);
-        assert_eq!(p2[2].seq, 4);
+        assert_eq!(p2.items.len(), 3);
+        assert_eq!(p2.items[0].seq, 6);
+        assert_eq!(p2.items[2].seq, 4);
+        assert!(p2.has_older);
+        assert!(p2.has_newer);
 
+        // after：从 p2 首项向"新"翻页，应回到第一页内容
+        let back = a2
+            .query_page(&Filter {
+                after: Some((p2.items[0].ts, p2.items[0].seq)),
+                limit: Some(3),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(back.items.len(), 3);
+        assert_eq!(back.items[0].seq, 9);
+        assert_eq!(back.items[2].seq, 7);
+        assert!(!back.has_newer); // seq 9 已是最新
+
+        // before 连续翻到底：6+3+1
         let p3 = a2
-            .query(&Filter {
-                cursor: Some((p2[2].ts, p2[2].seq)),
+            .query_page(&Filter {
+                before: Some((p2.items[2].ts, p2.items[2].seq)),
                 limit: Some(3),
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(p3.len(), 3);
-        assert_eq!(p3[2].seq, 1);
-
-        // 跨毫秒的游标也正确（ts 主导排序）
-        let mut e = ev("a", ActionKind::Net, Outcome::Ok);
-        e.ts = 4_999;
-        let _ = e;
+        assert_eq!(p3.items.len(), 3);
         let p4 = a2
-            .query(&Filter {
-                cursor: Some((p3[2].ts, p3[2].seq)),
+            .query_page(&Filter {
+                before: Some((p3.items[2].ts, p3.items[2].seq)),
                 limit: Some(3),
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(p4.len(), 1);
-        assert_eq!(p4[0].seq, 0);
+        assert_eq!(p4.items.len(), 1);
+        assert_eq!(p4.items[0].seq, 0);
+        assert!(!p4.has_older);
         a2.shutdown().unwrap();
     }
 

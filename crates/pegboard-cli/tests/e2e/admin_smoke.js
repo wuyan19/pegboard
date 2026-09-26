@@ -32,13 +32,15 @@ const BASE = process.argv[2];
       .first()
       .getAttribute("href");
     assert(href && href.startsWith("/apps/"), "app link: " + href);
-    // 4. 用量展开
-    await page.locator('#apps-body button[data-act="usage"]').first().click();
+    // 4. 行点击 → 模态框详情（含用量）
+    await page.locator("#apps-body tr.clickable").first().click();
     await page.waitForFunction(() =>
-      document.querySelectorAll("tr.detail").length >= 1 &&
-      document.querySelector("tr.detail").textContent.includes("KV")
+      !document.getElementById("modal").hidden &&
+      document.getElementById("modal-body").textContent.includes("实际用量")
     );
-    // 5. 审计日志过滤：outcome=Ok（fixture 里有 Denied 与 Ok…此处只验证请求通路与渲染）
+    await page.click("#modal-close");
+    await page.waitForFunction(() => document.getElementById("modal").hidden);
+    // 5. 审计日志过滤：outcome=Denied
     await page.selectOption("#f-outcome", "Denied");
     await page.waitForFunction(() =>
       !document.querySelector("#logs-body").textContent.includes("加载中")
@@ -47,11 +49,23 @@ const BASE = process.argv[2];
       Array.from(document.querySelectorAll("#logs-body .pill")).map((p) => p.textContent)
     );
     assert(
-      outcomeTexts.every((t) => t === "Denied"),
+      outcomeTexts.length >= 1 && outcomeTexts.every((t) => t === "Denied"),
       "过滤后应只剩 Denied: " + outcomeTexts
     );
-    // 重置过滤
+    // 重置过滤 + 换页大小 20：第一页有 较旧 按钮、无 较新 按钮
     await page.selectOption("#f-outcome", "");
+    await page.selectOption("#f-limit", "20");
+    await page.waitForFunction(() =>
+      !document.querySelector("#logs-body").textContent.includes("加载中")
+    );
+    assert(await page.locator("#logs-next").isEnabled(), "第一页应有较旧页");
+    assert(await page.locator("#logs-prev").isDisabled(), "第一页不应有较新页");
+    // 翻到第二页再翻回来
+    await page.click("#logs-next");
+    await page.waitForFunction(() => document.getElementById("log-page").textContent.includes("2"));
+    assert(await page.locator("#logs-prev").isEnabled(), "第二页应有较新页");
+    await page.click("#logs-prev");
+    await page.waitForFunction(() => document.getElementById("log-page").textContent.includes("1"));
 
     // 6. XSS 转义：安装一个 name 带脚本的清单，页面应显示文本而非执行
     const appsDir = process.env.ADMIN_E2E_APPS_DIR;

@@ -71,17 +71,21 @@ pub struct AppView {
     pub name: String,
     pub entry: String,
     pub enabled: bool,
+    /// 生命周期状态：enabled | disabled（批次二扩展 not_installed / invalid / missing）
+    pub state: &'static str,
     pub permissions: serde_json::Value,
     pub limits: serde_json::Value,
     pub installed_at: i64,
 }
 
 fn view_of(meta: &pegboard_core::app::AppMeta, enabled: bool, installed_at: i64) -> AppView {
+    let state = if enabled { "enabled" } else { "disabled" };
     AppView {
         id: meta.id.clone(),
         name: meta.name.clone(),
         entry: meta.manifest.entry.clone(),
         enabled,
+        state,
         permissions: json!({
             "store": meta.manifest.permissions.store,
             "files": meta.manifest.permissions.files,
@@ -136,6 +140,15 @@ async fn get_app(
     let mut view = serde_json::to_value(view_of(&meta, enabled, installed_at))
         .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("序列化: {e}")))?;
     view["usage"] = app_usage(&state, &meta).await;
+    view["root"] = json!(meta.root.display().to_string());
+    view["data_dir"] = json!(state
+        .config
+        .storage
+        .data_root
+        .join("apps_data")
+        .join(&meta.id)
+        .display()
+        .to_string());
     Ok((StatusCode::OK, Json(view)).into_response())
 }
 
@@ -298,8 +311,10 @@ struct LogQuery {
     outcome: Option<String>,
     since: Option<i64>,
     until: Option<i64>,
-    /// 倒序分页游标 "ts:seq"（上一页 next 原样传回）
-    cursor: Option<String>,
+    /// 倒向游标 "ts:seq"：取更早一页
+    before: Option<String>,
+    /// 正向游标 "ts:seq"：取更新一页
+    after: Option<String>,
     limit: Option<u32>,
 }
 
@@ -343,18 +358,22 @@ async fn list_logs(
                 .ok_or_else(|| ApiError::invalid_request(format!("未知 outcome: {s}")))?,
         ),
     };
-    let cursor = match q.cursor.as_deref() {
-        None => None,
-        Some(raw) => {
-            let (ts, seq) = raw
-                .split_once(':')
-                .and_then(|(t, s)| Some((t.parse::<i64>().ok()?, s.parse::<u64>().ok()?)))
-                .ok_or_else(|| {
-                    ApiError::invalid_request(format!("游标非法: {raw}（须为 ts:seq）"))
-                })?;
-            Some((ts, seq))
-        }
+    let parse_cursor = |raw: &str| -> Result<(i64, u64), ApiError> {
+        raw.split_once(':')
+            .and_then(|(t, s)| Some((t.parse::<i64>().ok()?, s.parse::<u64>().ok()?)))
+            .ok_or_else(|| ApiError::invalid_request(format!("游标非法: {raw}（须为 ts:seq）")))
     };
+    let before = match q.before.as_deref() {
+        None => None,
+        Some(raw) => Some(parse_cursor(raw)?),
+    };
+    let after = match q.after.as_deref() {
+        None => None,
+        Some(raw) => Some(parse_cursor(raw)?),
+    };
+    if before.is_some() && after.is_some() {
+        return Err(ApiError::invalid_request("before 与 after 不可同时使用"));
+    }
     let filter = Filter {
         app_id: q.app.clone(),
         subject: q.subject.clone(),
@@ -362,13 +381,15 @@ async fn list_logs(
         outcome,
         since: q.since,
         until: q.until,
-        cursor,
+        before,
+        after,
         limit: q.limit.map(|l| l.min(1000)),
     };
-    let events = state
+    let page = state
         .auditor
-        .query(&filter)
+        .query_page(&filter)
         .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("审计查询: {e}")))?;
+    let events = &page.items;
     let items: Vec<serde_json::Value> = events
         .iter()
         .map(|e| {
@@ -385,16 +406,21 @@ async fn list_logs(
             })
         })
         .collect();
-    // 满页才可能有下一页；游标取最后一项的 (ts, seq)
-    let effective_limit = q.limit.map(|l| l.min(1000)).unwrap_or(200) as usize;
-    let next = if events.len() == effective_limit && effective_limit > 0 {
-        events.last().map(|e| format!("{}:{}", e.ts, e.seq))
+    // 双向游标：next 取更早（末项），prev 取更新（首项）
+    let cursor_of = |e: &pegboard_core::audit::AuditEvent| format!("{}:{}", e.ts, e.seq);
+    let next = if page.has_older {
+        events.last().map(cursor_of)
+    } else {
+        None
+    };
+    let prev = if page.has_newer {
+        events.first().map(cursor_of)
     } else {
         None
     };
     Ok((
         StatusCode::OK,
-        Json(json!({ "items": items, "next": next })),
+        Json(json!({ "items": items, "next": next, "prev": prev })),
     )
         .into_response())
 }

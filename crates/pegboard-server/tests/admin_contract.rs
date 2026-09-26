@@ -420,7 +420,7 @@ async fn logs_cursor_pagination_no_overlap() {
     for _ in 0..5 {
         let mut uri = "/api/admin/logs?app=paging&limit=2".to_owned();
         if let Some(c) = &cursor {
-            uri.push_str(&format!("&cursor={c}"));
+            uri.push_str(&format!("&before={c}"));
         }
         let r = call(&env, Method::GET, &uri).await;
         assert_eq!(r.status(), StatusCode::OK);
@@ -449,10 +449,74 @@ async fn logs_cursor_pagination_no_overlap() {
 #[tokio::test]
 async fn logs_invalid_cursor_400() {
     let env = env();
-    let r = call(&env, Method::GET, "/api/admin/logs?cursor=garbage").await;
+    let r = call(&env, Method::GET, "/api/admin/logs?before=garbage").await;
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     let v = body_json(r).await;
     assert_eq!(v["error"]["code"], "INVALID_REQUEST");
+    let r = call(&env, Method::GET, "/api/admin/logs?after=garbage").await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let r = call(&env, Method::GET, "/api/admin/logs?before=1:1&after=1:1").await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn logs_bidirectional_paging() {
+    let env = env();
+    let handle = env.state.auditor.clone();
+    for i in 0..6i64 {
+        handle
+            .record(pegboard_core::audit::AuditEvent {
+                ts: 20_000 + i,
+                seq: 0,
+                app_id: Some("bidir".into()),
+                subject: None,
+                action: pegboard_core::audit::ActionKind::Net,
+                target: Some(format!("t{i}")),
+                outcome: pegboard_core::audit::Outcome::Ok,
+                error_code: None,
+                duration_ms: 1,
+            })
+            .expect("record");
+    }
+    // 等待落盘
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let r = call(&env, Method::GET, "/api/admin/logs?app=bidir&limit=2").await;
+        let v = body_json(r).await;
+        if v["items"].as_array().is_some_and(|a| a.len() == 2) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "审计未落盘");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    // 第一页（最新 2 条）：有 next 无 prev
+    let r = call(&env, Method::GET, "/api/admin/logs?app=bidir&limit=2").await;
+    let v = body_json(r).await;
+    let next = v["next"].as_str().expect("next").to_owned();
+    assert!(v["prev"].is_null());
+    assert_eq!(v["items"][0]["target"], "t5");
+
+    // before 翻到第二页：有 next 有 prev
+    let r = call(
+        &env,
+        Method::GET,
+        &format!("/api/admin/logs?app=bidir&limit=2&before={next}"),
+    )
+    .await;
+    let v = body_json(r).await;
+    assert_eq!(v["items"][0]["target"], "t3");
+    let prev = v["prev"].as_str().expect("prev").to_owned();
+
+    // after 翻回第一页：内容与第一页一致
+    let r = call(
+        &env,
+        Method::GET,
+        &format!("/api/admin/logs?app=bidir&limit=2&after={prev}"),
+    )
+    .await;
+    let v = body_json(r).await;
+    assert_eq!(v["items"][0]["target"], "t5");
+    assert!(v["prev"].is_null());
 }
 
 #[tokio::test]
