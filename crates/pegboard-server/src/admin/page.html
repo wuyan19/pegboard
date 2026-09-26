@@ -8,124 +8,279 @@
   :root { color-scheme: light dark; }
   body { font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f7f7f8; color: #1c1c1e; }
   @media (prefers-color-scheme: dark) { body { background: #161618; color: #e8e8ea; } }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 15px; margin: 24px 0 8px; }
-  .sub { color: #888; margin-bottom: 20px; font-size: 12px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  h2 { font-size: 15px; margin: 24px 0 8px; display: flex; align-items: baseline; gap: 12px; }
+  .sub { color: #888; margin-bottom: 16px; font-size: 12px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
   table { border-collapse: collapse; width: 100%; background: var(--card, #fff); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
   @media (prefers-color-scheme: dark) { table { background: #1e1e21; } }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(128,128,128,.2); font-size: 13px; vertical-align: top; }
   th { font-weight: 600; color: #666; font-size: 12px; }
-  code { font-family: ui-monospace, monospace; font-size: 12px; }
+  code, .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  a { color: #0a84ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; }
   .ok { background: #d4f4dd; color: #14532d; }
   .off { background: #f3d6d6; color: #7f1d1d; }
-  @media (prefers-color-scheme: dark) { .ok { background: #14351f; color: #7ee2a8; } .off { background: #3d1a1a; color: #f0a3a3; } }
-  button { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; cursor: pointer; }
+  .warn { background: #fdeccc; color: #7c4a03; }
+  .err { background: #f3d6d6; color: #7f1d1d; }
+  @media (prefers-color-scheme: dark) {
+    .ok { background: #14351f; color: #7ee2a8; }
+    .off, .err { background: #3d1a1a; color: #f0a3a3; }
+    .warn { background: #3d2a10; color: #f5c67a; }
+  }
+  button, select, input { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; }
+  button { cursor: pointer; }
   button:hover { background: rgba(128,128,128,.12); }
   .muted { color: #888; }
-  .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  #status { font-size: 12px; color: #888; }
 </style>
 </head>
 <body>
 <h1>Pegboard</h1>
-<div class="sub">宿主管理 · 应用 / 权限 / 限额 / 审计日志（只读元数据，无业务数据）</div>
+<div class="sub">宿主管理 · 应用 / 权限 / 限额 / 审计日志（只读元数据，无业务数据）· <span id="status">加载中…</span></div>
 
-<h2>应用</h2>
+<h2>应用 <button id="refresh" title="立即刷新（每 10 秒自动刷新）">刷新</button></h2>
+<div class="bar">
+  <input id="install-id" placeholder="应用 id（apps/ 目录名）" size="26">
+  <button id="install">安装</button>
+  <span class="muted" id="install-msg">按清单校验后注册；失败会显示原因</span>
+</div>
 <table id="apps">
   <thead><tr><th>ID</th><th>名称</th><th>状态</th><th>权限</th><th>限额（生效）</th><th>操作</th></tr></thead>
-  <tbody></tbody>
+  <tbody id="apps-body"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
 </table>
+<div class="sub">禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问；卸载删除该应用的数据目录与签名 token，产物目录保留。</div>
 
 <h2>审计日志</h2>
-<div class="sub">能力调用事件（静态访问不入审计）。过滤：<code>?app=&action=&outcome=&limit=</code></div>
+<div class="sub">能力调用事件（静态访问不入审计）。</div>
+<div class="bar">
+  <select id="f-app" title="按应用过滤"><option value="">全部应用</option></select>
+  <select id="f-action" title="按动作过滤">
+    <option value="">全部动作</option>
+    <option>Store</option><option>Files</option><option>Net</option>
+    <option>Ws</option><option>Admin</option><option>Identity</option>
+  </select>
+  <select id="f-outcome" title="按结果过滤">
+    <option value="">全部结果</option>
+    <option>Ok</option><option>Denied</option><option>Error</option>
+  </select>
+  <select id="f-limit" title="条数上限">
+    <option>100</option><option>500</option><option>1000</option>
+  </select>
+</div>
 <table id="logs">
   <thead><tr><th>时间</th><th>应用</th><th>subject</th><th>动作</th><th>目标</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead>
-  <tbody></tbody>
+  <tbody id="logs-body"><tr><td colspan="8" class="muted">加载中…</td></tr></tbody>
 </table>
 
 <script>
 "use strict";
+const $ = (id) => document.getElementById(id);
+
+// 所有插值一律转义：应用名 / 日志字段来自第三方内容（清单、目标域名），防注入
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+async function j(url, opts) {
+  const r = await fetch(url, opts);
+  if (r.ok) return r.status === 204 ? null : r.json();
+  let body = {};
+  try { body = await r.json(); } catch (_) {}
+  const e = (body && body.error) || {};
+  const err = new Error(e.message || r.statusText);
+  err.code = e.code;
+  err.status = r.status;
+  throw err;
+}
+
 function fmtBytes(n) {
   if (n >= 1073741824) return (n / 1073741824).toFixed(1) + " GiB";
   if (n >= 1048576) return (n / 1048576).toFixed(1) + " MiB";
   if (n >= 1024) return (n / 1024).toFixed(1) + " KiB";
   return n + " B";
 }
-function fmtTime(ms) {
-  const d = new Date(ms);
-  return d.toLocaleString();
+
+function relTime(ts) {
+  const d = Date.now() - ts;
+  if (!(d >= 0)) return new Date(ts).toLocaleString();
+  if (d < 10_000) return "刚刚";
+  if (d < 60_000) return Math.round(d / 1000) + " 秒前";
+  if (d < 3_600_000) return Math.round(d / 60_000) + " 分钟前";
+  if (d < 86_400_000) return Math.round(d / 3_600_000) + " 小时前";
+  return Math.round(d / 86_400_000) + " 天前";
 }
-async function j(url, opts) {
-  const r = await fetch(url, opts);
-  if (!r.ok) throw new Error(url + " " + r.status);
-  return r.status === 204 ? null : r.json();
+
+function setBody(sel, html) {
+  $(sel.slice(1)).innerHTML = html;
 }
+
+function errorRow(cols, e, retry) {
+  const tr = document.createElement("tr");
+  tr.innerHTML =
+    '<td colspan="' + cols + '">' +
+    '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " +
+    esc(e.message || e) + " " +
+    '<button>重试</button></td>';
+  tr.querySelector("button").addEventListener("click", retry);
+  return tr;
+}
+
+// ---------- 应用 ----------
+
+let appsCache = [];
+
 async function loadApps() {
-  const apps = await j("/api/admin/apps");
-  const tbody = document.querySelector("#apps tbody");
-  tbody.innerHTML = "";
-  for (const a of apps) {
-    const tr = document.createElement("tr");
-    const perms = [
-      a.permissions.store && "store",
-      a.permissions.files && "files",
-      a.permissions.net.length && "net:" + a.permissions.net.join(", "),
-      a.permissions.ws.length && "ws:" + a.permissions.ws.join(", "),
-      "shim:" + a.permissions.shim,
-    ].filter(Boolean);
-    const limits = [
-      "kv " + fmtBytes(a.limits.kv_value_bytes) + " / " + fmtBytes(a.limits.kv_total_bytes),
-      "file " + fmtBytes(a.limits.file_bytes) + " / " + fmtBytes(a.limits.file_total_bytes),
-      a.limits.net_rps + " rps",
-    ];
-    tr.innerHTML =
-      "<td><code>" + a.id + "</code></td>" +
-      "<td>" + a.name + "</td>" +
-      '<td><span class="pill ' + (a.enabled ? "ok" : "off") + '">' + (a.enabled ? "启用" : "禁用") + "</span></td>" +
-      '<td class="mono">' + perms.join("<br>") + "</td>" +
-      '<td class="mono">' + limits.join("<br>") + "</td>" +
-      "<td>" +
-        '<button data-id="' + a.id + '" data-act="' + (a.enabled ? "disable" : "enable") + '">' +
-          (a.enabled ? "禁用" : "启用") + "</button> " +
-        '<button data-id="' + a.id + '" data-act="uninstall">卸载</button>' +
-      "</td>";
-    tbody.appendChild(tr);
-  }
-  tbody.querySelectorAll("button").forEach((b) => {
-    b.addEventListener("click", async () => {
-      const id = b.getAttribute("data-id");
-      const act = b.getAttribute("data-act");
-      if (act === "uninstall" && !confirm("卸载 " + id + "：删除其数据目录与签名 token，产物保留。继续？")) return;
-      try {
-        await j("/api/admin/apps/" + encodeURIComponent(id) + "/" + act, { method: "POST" });
-        await loadApps();
-      } catch (e) { alert(e.message); }
+  if (appsInFlight) return;
+  appsInFlight = true;
+  try {
+    appsCache = await j("/api/admin/apps");
+    const tbody = $("apps-body");
+    tbody.innerHTML = "";
+    if (!appsCache.length) {
+      setBody("#apps-body",
+        '<tr><td colspan="6" class="muted">没有已注册应用；把应用放进 apps/ 目录后，在上方输入 id 安装</td></tr>');
+    }
+    for (const a of appsCache) {
+      const tr = document.createElement("tr");
+      const perms = [
+        a.permissions.store && "store",
+        a.permissions.files && "files",
+        a.permissions.net.length && "net: " + a.permissions.net.join(", "),
+        a.permissions.ws.length && "ws: " + a.permissions.ws.join(", "),
+        "shim: " + a.permissions.shim,
+      ].filter(Boolean);
+      const limits = [
+        "kv " + fmtBytes(a.limits.kv_value_bytes) + " / " + fmtBytes(a.limits.kv_total_bytes),
+        "file " + fmtBytes(a.limits.file_bytes) + " / " + fmtBytes(a.limits.file_total_bytes),
+        a.limits.net_rps + " rps",
+      ];
+      tr.innerHTML =
+        "<td><code>" + esc(a.id) + "</code></td>" +
+        "<td><a href=\"/apps/" + esc(a.id) + "/\" target=\"_blank\" title=\"打开应用\">" + esc(a.name) + "</a>" +
+        '<div class="mono muted">' + esc(a.entry) + "</div></td>" +
+        '<td><span class="pill ' + (a.enabled ? "ok" : "off") + '">' + (a.enabled ? "启用" : "禁用") + "</span></td>" +
+        '<td class="mono">' + perms.map(esc).join("<br>") + "</td>" +
+        '<td class="mono">' + limits.map(esc).join("<br>") + "</td>" +
+        "<td>" +
+          '<button data-id="' + esc(a.id) + '" data-act="' + (a.enabled ? "disable" : "enable") + '" title="' +
+            (a.enabled ? "禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问" : "恢复能力 API 访问") + '">' +
+            (a.enabled ? "禁用" : "启用") + "</button> " +
+          '<button data-id="' + esc(a.id) + '" data-act="uninstall" title="删除数据目录与签名 token，产物目录保留">卸载</button>' +
+        "</td>";
+      tbody.appendChild(tr);
+    }
+    tbody.querySelectorAll("button[data-act]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const id = b.getAttribute("data-id");
+        const act = b.getAttribute("data-act");
+        if (act === "uninstall" &&
+            !confirm("卸载 " + id + "：删除其数据目录与签名 token，产物目录保留。继续？")) return;
+        try {
+          await j("/api/admin/apps/" + encodeURIComponent(id) + "/" + act, { method: "POST" });
+          await refreshAll();
+        } catch (e) {
+          alert((e.code ? e.code + " " : "") + e.message);
+        }
+      });
     });
-  });
+    // 应用过滤下拉：保留当前选择
+    const sel = $("f-app");
+    const current = sel.value;
+    sel.innerHTML = '<option value="">全部应用</option>' +
+      appsCache.map((a) => '<option value="' + esc(a.id) + '">' + esc(a.id) + "</option>").join("");
+    sel.value = current;
+    $("status").textContent = "更新于 " + new Date().toLocaleTimeString();
+  } catch (e) {
+    setBody("#apps-body", "");
+    $("apps-body").appendChild(errorRow(6, e, loadApps));
+    $("status").textContent = "刷新失败";
+  } finally {
+    appsInFlight = false;
+  }
 }
+
+$("install").addEventListener("click", async () => {
+  const id = $("install-id").value.trim();
+  if (!id) return;
+  $("install-msg").textContent = "安装中…";
+  try {
+    await j("/api/admin/apps/" + encodeURIComponent(id) + "/install", { method: "POST" });
+    $("install-msg").textContent = "已安装 " + id;
+    $("install-id").value = "";
+    await refreshAll();
+  } catch (e) {
+    $("install-msg").innerHTML =
+      '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
+  }
+});
+$("install-id").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") $("install").click();
+});
+
+// ---------- 审计日志 ----------
+
+const OUTCOME_CLASS = { Ok: "ok", Denied: "warn", Error: "err" };
+
 async function loadLogs() {
-  const logs = await j("/api/admin/logs?limit=100");
-  const tbody = document.querySelector("#logs tbody");
-  tbody.innerHTML = "";
-  for (const e of logs.items) {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      "<td class=\"muted\">" + fmtTime(e.ts) + "</td>" +
-      "<td><code>" + (e.app_id || "-") + "</code></td>" +
-      "<td>" + (e.subject || "-") + "</td>" +
-      "<td>" + e.action + "</td>" +
-      '<td class="mono">' + (e.target || "-") + "</td>" +
-      "<td>" + e.outcome + "</td>" +
-      '<td class="mono">' + (e.error_code || "-") + "</td>" +
-      "<td>" + e.duration_ms + " ms</td>";
-    tbody.appendChild(tr);
-  }
-  if (!logs.items.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="muted">暂无事件</td></tr>';
+  if (logsInFlight) return;
+  logsInFlight = true;
+  try {
+    const q = new URLSearchParams();
+    if ($("f-app").value) q.set("app", $("f-app").value);
+    if ($("f-action").value) q.set("action", $("f-action").value);
+    if ($("f-outcome").value) q.set("outcome", $("f-outcome").value);
+    q.set("limit", $("f-limit").value);
+    const page = await j("/api/admin/logs?" + q.toString());
+    const items = page.items || [];
+    const tbody = $("logs-body");
+    tbody.innerHTML = "";
+    if (!items.length) {
+      setBody("#logs-body", '<tr><td colspan="8" class="muted">暂无事件（过滤条件或时间范围内没有能力调用）</td></tr>');
+    }
+    for (const e of items) {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td class="muted" title="' + esc(new Date(e.ts).toLocaleString()) + '">' + esc(relTime(e.ts)) + "</td>" +
+        "<td><code>" + esc(e.app_id || "-") + "</code></td>" +
+        "<td>" + esc(e.subject || "-") + "</td>" +
+        "<td>" + esc(e.action) + "</td>" +
+        '<td class="mono">' + esc(e.target || "-") + "</td>" +
+        '<td><span class="pill ' + (OUTCOME_CLASS[e.outcome] || "") + '">' + esc(e.outcome) + "</span></td>" +
+        '<td class="mono">' + esc(e.error_code || "-") + "</td>" +
+        "<td>" + esc(e.duration_ms) + " ms</td>";
+      tbody.appendChild(tr);
+    }
+  } catch (e) {
+    setBody("#logs-body", "");
+    $("logs-body").appendChild(errorRow(8, e, loadLogs));
+  } finally {
+    logsInFlight = false;
   }
 }
-loadApps().catch((e) => console.error(e));
-loadLogs().catch((e) => console.error(e));
+
+for (const id of ["f-app", "f-action", "f-outcome", "f-limit"]) {
+  $(id).addEventListener("change", loadLogs);
+}
+
+// ---------- 刷新 ----------
+
+let appsInFlight = false;
+let logsInFlight = false;
+
+async function refreshAll() {
+  await Promise.allSettled([loadApps(), loadLogs()]);
+}
+
+$("refresh").addEventListener("click", refreshAll);
+setInterval(() => {
+  if (document.visibilityState === "visible" && !appsInFlight && !logsInFlight) refreshAll();
+}, 10_000);
+
+refreshAll();
 </script>
 </body>
 </html>
