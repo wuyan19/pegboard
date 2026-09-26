@@ -20,6 +20,7 @@ http-body = { workspace = true }
 bytes = { workspace = true }
 mime_guess = { workspace = true }
 percent-encoding = { workspace = true }
+url = { workspace = true }
 futures-util = { workspace = true }
 tracing = { workspace = true }
 

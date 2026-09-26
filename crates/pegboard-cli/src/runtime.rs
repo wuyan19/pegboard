@@ -46,10 +46,24 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
     .map_err(|e| format!("启动审计器失败: {e}"))?;
     let audit_handle = auditor.handle();
 
+    let guard = Arc::new(pegboard_core::guard::Guard::with_injected(
+        config
+            .identity
+            .injected_headers()
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
+    ));
+    let proxy = pegboard_core::proxy::Proxy::new(
+        Arc::clone(&guard),
+        pegboard_core::proxy::ProxyConfig::default(),
+    )
+    .map_err(|e| format!("构造代理器失败: {e}"))?;
     let state = Arc::new(AppState {
         identity: pegboard_core::identity::Identity::new(&config.identity),
-        guard: Arc::new(pegboard_core::guard::Guard::new()),
+        guard,
         stores: pegboard_core::store::StoreManager::new(data_root.join("apps_data"), config.limits),
+        proxy: Arc::new(proxy),
         config: config.clone(),
         apps: RwLock::new(outcome.registry),
         auditor: audit_handle.clone(),

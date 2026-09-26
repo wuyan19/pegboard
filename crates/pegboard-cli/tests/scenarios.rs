@@ -1,8 +1,9 @@
 //! 场景测试：驱动真实页面/SDK 语义对真实服务器验证（项目骨架 §8）。
-//! M3：SDK host.store 读写 KV —— node 桥接执行真实 sdk.js（浏览器场景在 M7 用 Playwright）。
+//! M3：SDK host.store；M4：host.fetch/shim/url 跨域拉取 + SSE 流式首字节。
+//! node 桥接执行真实 sdk.js（浏览器场景在 M7 用 Playwright）。
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
@@ -123,4 +124,130 @@ async fn scenario_sdk_store_served_by_host() {
     let html = page.text().await.expect("page body");
     assert!(html.contains(r#"<script src="/sdk.js"></script>"#));
     stop_server(child);
+}
+
+/// 起本地上游（node fixture），返回 (child, base_url)。
+fn start_upstream() -> (Child, String) {
+    let mut child = Command::new("node")
+        .arg("tests/fixtures/upstream_fixture.js")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn upstream");
+    let stdout = child.stdout.take().expect("stdout");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut base = None;
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    loop {
+        if Instant::now() > deadline {
+            panic!("upstream did not start");
+        }
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => panic!("upstream exited"),
+            Ok(_) => {
+                if let Some(rest) = line.strip_prefix("UPSTREAM-READY ") {
+                    base = Some(rest.trim().to_owned());
+                    break;
+                }
+            }
+            Err(e) => panic!("read upstream stdout: {e}"),
+        }
+    }
+    let _ = child.stdout.take();
+    (child, base.expect("upstream base"))
+}
+
+fn stop_upstream(mut child: Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn urlencode(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+#[tokio::test]
+async fn scenario_sdk_fetch_cross_origin() {
+    let (up_child, upstream_base) = start_upstream();
+    let perms = format!(r#"{{"net":[{:?}]}}"#, upstream_base);
+    let (child, base, _root) = start_server(&[("nettest", &perms)]);
+    let out = Command::new("node")
+        .arg("tests/fixtures/sdk_fetch_scenario.js")
+        .arg(&base)
+        .arg(sdk_path())
+        .arg(&upstream_base)
+        .output()
+        .expect("run node scenario");
+    stop_server(child);
+    stop_upstream(up_child);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "node fetch scenario failed:\n{text}\nstatus: {:?}",
+        out.status.code()
+    );
+    assert!(text.contains("SDK-FETCH-SCENARIO-OK"), "{text}");
+}
+
+/// SSE 流式：代理首字节延迟与直连相当（不缓冲整流再返回）。
+#[tokio::test]
+async fn scenario_sse_first_byte_latency() {
+    let (up_child, upstream_base) = start_upstream();
+    let sse_url = format!("{upstream_base}/sse");
+    let perms = format!(r#"{{"net":[{:?}]}}"#, upstream_base);
+    let (child, base, _root) = start_server(&[("ssetest", &perms)]);
+
+    // 直连基线：首字节时间 + 事件数
+    let direct_start = Instant::now();
+    let direct = reqwest::get(&sse_url).await.expect("direct sse");
+    let direct_first = direct_start.elapsed();
+    let direct_total = count_sse_events(direct).await;
+
+    // 经代理：首字节时间 + 事件数
+    let proxy_target = format!("{base}/api/proxy?url={}", urlencode(&sse_url));
+    let client = reqwest::Client::new();
+    let proxy_start = Instant::now();
+    let proxied = client
+        .get(&proxy_target)
+        .header("x-pegboard-app", "ssetest")
+        .send()
+        .await
+        .expect("proxied sse");
+    assert_eq!(proxied.status(), 200);
+    let proxy_first = proxy_start.elapsed();
+    let proxy_total = count_sse_events(proxied).await;
+
+    stop_server(child);
+    stop_upstream(up_child);
+
+    // 流完整性：事件条数一致
+    assert_eq!(direct_total, proxy_total, "代理应完整透传所有事件");
+    assert!(proxy_total >= 20, "事件数: {proxy_total}");
+    // 首字节与直连相当：允许 500ms 开销；若先缓冲整流（~2s）则远超
+    assert!(
+        proxy_first < direct_first + Duration::from_millis(500),
+        "代理首字节 {proxy_first:?} vs 直连 {direct_first:?}"
+    );
+    assert!(
+        proxy_first.as_millis() < 1500,
+        "代理首字节 {proxy_first:?} 表明发生了整流缓冲"
+    );
+}
+
+/// 逐 chunk 计数 "data: " 行，验证流式接收。
+async fn count_sse_events(response: reqwest::Response) -> usize {
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut count = 0usize;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.expect("chunk");
+        count += chunk.windows(6).filter(|w| w == b"data: ").count();
+    }
+    count
 }

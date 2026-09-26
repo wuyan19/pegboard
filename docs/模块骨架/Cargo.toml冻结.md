@@ -136,6 +136,7 @@ http-body = { workspace = true }
 bytes = { workspace = true }
 mime_guess = { workspace = true }
 percent-encoding = { workspace = true }
+url = { workspace = true }
 futures-util = { workspace = true }
 tracing = { workspace = true }
 
@@ -170,8 +171,10 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "json"] }
+reqwest = { workspace = true, features = ["rustls", "json", "stream"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+futures-util = { workspace = true }
+url = { workspace = true }
 ```
 
 ### `crates/pegboard-sdk/Cargo.toml`

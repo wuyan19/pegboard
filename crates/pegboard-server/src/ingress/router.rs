@@ -9,9 +9,11 @@ use pegboard_core::audit::AuditorHandle;
 use pegboard_core::config::Config;
 use pegboard_core::guard::Guard;
 use pegboard_core::identity::Identity;
+use pegboard_core::proxy::Proxy;
 use pegboard_core::store::StoreManager;
 
 use crate::ingress::error::ApiError;
+use crate::ingress::proxy_api;
 use crate::ingress::store_api;
 use crate::statics;
 
@@ -24,6 +26,7 @@ pub struct AppState {
     pub identity: Identity,
     pub guard: Arc<Guard>,
     pub stores: StoreManager,
+    pub proxy: Arc<Proxy>,
 }
 
 impl AppState {
@@ -42,6 +45,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(statics::routes())
         .merge(store_api::routes())
+        .merge(proxy_api::routes())
         .fallback(not_found_fallback)
         .with_state(state)
 }

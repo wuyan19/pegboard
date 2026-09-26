@@ -461,6 +461,11 @@ mod tests {
         .expect("auditor")
         .handle();
         let limits = config.limits;
+        let proxy = pegboard_core::proxy::Proxy::new(
+            Arc::new(pegboard_core::guard::Guard::new()),
+            pegboard_core::proxy::ProxyConfig::default(),
+        )
+        .expect("proxy");
         let state = Arc::new(AppState {
             identity: pegboard_core::identity::Identity::new(&config.identity),
             guard: Arc::new(pegboard_core::guard::Guard::new()),
@@ -468,6 +473,7 @@ mod tests {
                 root.path().join("data/apps_data"),
                 limits,
             ),
+            proxy: Arc::new(proxy),
             config,
             apps: std::sync::RwLock::new(outcome.registry),
             auditor,

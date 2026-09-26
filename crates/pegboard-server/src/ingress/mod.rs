@@ -5,6 +5,7 @@
 
 pub mod context;
 pub mod error;
+pub mod proxy_api;
 pub mod router;
 pub mod store_api;
 

@@ -8,4 +8,5 @@ pub mod audit;
 pub mod config;
 pub mod guard;
 pub mod identity;
+pub mod proxy;
 pub mod store;

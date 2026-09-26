@@ -1,5 +1,5 @@
-// pegboard sdk.js — M3：host.store（KV 原语）。
-// fetch / connectWS / files / url 随 M4-M6 提供。
+// pegboard sdk.js — M4：host.store + host.fetch + fetch shim + host.url。
+// connectWS / files 随 M5-M6 提供。
 // 注入约定：宿主在本脚本之前注入
 //   <script>window.__PEGBOARD__ = { appId: "...", shim: true }</script>
 (function () {
@@ -95,10 +95,113 @@
     }
   };
 
+  // ---- host.fetch：语义对齐原生 fetch（API 契约 §7 / SDK 设计 §4）----
+
+  function sameOrigin(url) {
+    if (typeof location !== "undefined" && location.origin) {
+      return url.indexOf(location.origin + "/") === 0;
+    }
+    return false; // 无 location 环境（测试垫片）视绝对地址为跨域
+  }
+
+  function proxyUrl(target) {
+    return "/api/proxy?url=" + encodeURIComponent(target);
+  }
+
+  // SDK 在所有请求上带应用身份头（ingress 应用识别依赖它）
+  function withAppHeader(headers) {
+    var out = {};
+    if (headers) {
+      Object.keys(headers).forEach(function (k) {
+        if (k.toLowerCase() !== "x-pegboard-app") out[k] = headers[k];
+      });
+    }
+    if (appId) out["X-Pegboard-App"] = appId;
+    return out;
+  }
+
+  function hostFetch(url, options) {
+    options = options || {};
+    var target = String(url);
+    if (target.indexOf("/") === 0 || sameOrigin(target)) {
+      // 同源 / 相对路径 → 原生 fetch（不再二次包装）
+      return fetch(target, options);
+    }
+    // 跨域绝对 URL → 代理；请求头透传（宿主出站清理 Cookie 等）
+    var init = {
+      method: options.method || "GET",
+      headers: withAppHeader(options.headers),
+      body: options.body,
+      signal: options.signal
+    };
+    return fetch(proxyUrl(target), init).then(function (res) {
+      if (res.ok) return res;
+      return res.json().catch(function () { return {}; }).then(function (body) {
+        var e = (body && body.error) || {};
+        throw fail(e.code || "UPSTREAM_ERROR", e.message || res.statusText, e.detail);
+      });
+    });
+  }
+
+  // ---- host.url：img / font / CSS url() 等资源代理地址（/api/asset）----
+
+  function hostUrl(target) {
+    var t = String(target);
+    if (t.indexOf("/") === 0 || sameOrigin(t)) {
+      return t;
+    }
+    return "/api/asset?url=" + encodeURIComponent(t);
+  }
+
+  // ---- fetch shim（permissions.shim 时包装 window.fetch；SDK 设计 §5）----
+
+  var nativeFetch = typeof fetch === "function" ? fetch : null;
+
+  function installShim() {
+    if (!nativeFetch) return;
+    window.fetch = function (input, init) {
+      // Request 对象展开为 init（需补充身份头）
+      var isRequest = typeof input === "object" && input && typeof input.url === "string";
+      var target = isRequest ? input.url : input;
+      var t = String(target);
+      var merged = init || {};
+      if (isRequest) {
+        merged = {
+          method: input.method,
+          headers: withAppHeader(headersToObject(input.headers)),
+          body: input.body,
+          signal: input.signal
+        };
+      } else if (t.indexOf("/api/") === 0 || t.indexOf("/") === 0) {
+        merged.headers = withAppHeader(merged.headers);
+      }
+      if (t.indexOf("/api/") === 0 || t.indexOf("/") === 0 || sameOrigin(t)) {
+        return nativeFetch(isRequest ? t : input, merged);
+      }
+      merged.headers = withAppHeader(merged.headers);
+      return nativeFetch(proxyUrl(t), merged);
+    };
+  }
+
+  function headersToObject(headers) {
+    if (!headers) return {};
+    if (typeof headers.forEach === "function") {
+      var out = {};
+      headers.forEach(function (v, k) { out[k] = v; });
+      return out;
+    }
+    return headers;
+  }
+
   window.host = window.host || {};
   window.host.store = store;
+  window.host.fetch = hostFetch;
+  window.host.url = hostUrl;
   window.host.__pegboard = {
     appId: appId,
     shim: !boot || boot.shim !== false
   };
+  if (window.host.__pegboard.shim) {
+    installShim();
+  }
 })();
