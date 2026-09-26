@@ -1,0 +1,18 @@
+[server]
+listen = "127.0.0.1:8787"
+mode = "local"
+
+[identity]
+kind = "fixed"
+subject = "local"
+
+[limits]
+kv_value_bytes = 1048576
+kv_total_bytes = 10485760
+file_bytes = 104857600
+file_total_bytes = 1073741824
+net_rps = 20
+sign_ttl_max = 86400
+
+[storage]
+data_root = "./data"
