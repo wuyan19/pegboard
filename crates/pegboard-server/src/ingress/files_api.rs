@@ -9,7 +9,8 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 
 use axum::body::Body;
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::multipart::MultipartError;
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -27,9 +28,31 @@ use crate::ingress::{trace_audit, AppState};
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/api/files", get(list).post(upload))
+        .route("/api/files", get(list).post(post_upload()))
         .route("/api/files/{id}", get(get_one).delete(delete_one))
         .route("/api/files/{id}/sign", post(sign))
+}
+
+/// POST /api/files：解除 axum 默认 2MB 请求体上限的上传路由。
+fn post_upload() -> axum::routing::MethodRouter<Arc<AppState>> {
+    use axum::handler::Handler as _;
+    post(upload.layer(upload_body_limit()))
+}
+
+/// 上传路由解除 axum 默认 2MB 请求体上限：配额在流式读取中逐块校验
+/// （超 `file_bytes` 即断并返回 413），解除默认上限才能让大文件走到该检查。
+fn upload_body_limit() -> DefaultBodyLimit {
+    DefaultBodyLimit::disable()
+}
+
+/// multipart 错误映射：长度类（超出请求体上限）→ LIMIT_EXCEEDED 413；
+/// 格式类 → INVALID_REQUEST 400（API 契约 §6）。
+fn multipart_error(e: MultipartError) -> ApiError {
+    if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ApiError::new(code::LIMIT_EXCEEDED, 413, format!("请求体超出上限: {e}"))
+    } else {
+        ApiError::invalid_request(format!("multipart: {e}"))
+    }
 }
 
 fn meta_json(m: &FileMeta) -> serde_json::Value {
@@ -67,7 +90,7 @@ async fn upload(
         while let Some(mut field) = multipart
             .next_field()
             .await
-            .map_err(|e| ApiError::invalid_request(format!("multipart: {e}")))?
+            .map_err(multipart_error)?
         {
             if field.name() != Some("file") {
                 // 跳过非 file 字段
@@ -94,10 +117,7 @@ async fn upload(
             let mut out = tokio::fs::File::create(&staged)
                 .await
                 .map_err(|e| ApiError::new(code::UPSTREAM_ERROR, 502, format!("暂存失败: {e}")))?;
-            while let Some(chunk) = field
-                .chunk()
-                .await
-                .map_err(|e| ApiError::invalid_request(format!("multipart chunk: {e}")))?
+            while let Some(chunk) = field.chunk().await.map_err(multipart_error)?
             {
                 size += chunk.len() as u64;
                 if size > ctx.app.limits.file_bytes {

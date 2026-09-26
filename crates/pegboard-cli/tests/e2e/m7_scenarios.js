@@ -107,18 +107,36 @@ async function scenarioLanShare() {
   try {
     const { context, page } = await newPage(browser);
     await page.goto(BASE + "/apps/lan-share/");
+    // 大于 axum 默认 2MB 请求体上限的文件（回归：上传曾报 INVALID_REQUEST）
+    const big = Buffer.alloc(3 * 1024 * 1024, 0xA5);
     const picker = await page.locator("#picker");
-    await picker.setInputFiles({
-      name: "share-me.txt",
-      mimeType: "text/plain",
-      buffer: Buffer.from("lan-share-scenario-content"),
-    });
+    await picker.setInputFiles([
+      {
+        name: "share-me.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("lan-share-scenario-content"),
+      },
+      { name: "big.bin", mimeType: "application/octet-stream", buffer: big },
+    ]);
     await page.waitForFunction(() =>
-      document.querySelectorAll("#files tbody tr").length >= 1 &&
-      document.querySelector("#files tbody tr").textContent.includes("share-me.txt")
+      document.querySelectorAll("#files tbody tr").length >= 2 &&
+      document.querySelector("#files tbody tr").textContent.includes("big.bin")
     );
-    // 签名分享
-    await page.locator("#files tbody tr:first-child button", { hasText: "签名分享" }).click();
+    // 3MB 内容完整性（经下载链路读回）
+    const bigHref = await page
+      .locator("#files tbody tr", { hasText: "big.bin" })
+      .locator("a")
+      .getAttribute("href");
+    const bigResp = await page.request.get(BASE + bigHref);
+    assert(bigResp.status() === 200, "big download status: " + bigResp.status());
+    const bigBody = await bigResp.body();
+    assert(bigBody.length === big.length, "big size: " + bigBody.length);
+    assert(bigBody[0] === 0xa5 && bigBody[bigBody.length - 1] === 0xa5, "big content");
+    // 签名分享（定位 share-me.txt 行，列表按时间倒序、big.bin 在前）
+    await page
+      .locator("#files tbody tr", { hasText: "share-me.txt" })
+      .locator("button", { hasText: "签名分享" })
+      .click();
     await page.waitForSelector("#files .share a");
     const shareUrl = await page.locator("#files .share a").getAttribute("href");
     assert(shareUrl && shareUrl.includes("/api/files/"), "share url: " + shareUrl);
@@ -129,12 +147,25 @@ async function scenarioLanShare() {
     assert(resp.status() === 200, "signed url status: " + resp.status());
     const text = await resp.text();
     assert(text === "lan-share-scenario-content", "signed content mismatch");
-    // 下载链接（应用内 url）
-    const href = await page.locator("#files tbody a").first().getAttribute("href");
+    // 下载链接（应用内 url；取名称单元格的链接，行内另有签名分享链接）
+    const href = await page
+      .locator("#files tbody tr", { hasText: "share-me.txt" })
+      .locator("td")
+      .first()
+      .locator("a")
+      .getAttribute("href");
     const dl = await page.request.get(BASE + href);
     assert(dl.status() === 200, "download status: " + dl.status() + " url=" + href);
-    // 删除
-    await page.locator("#files tbody tr:first-child button", { hasText: "删除" }).click();
+    // 删除两个文件
+    await page
+      .locator("#files tbody tr", { hasText: "big.bin" })
+      .locator("button", { hasText: "删除" })
+      .click();
+    await page.waitForFunction(() => document.querySelectorAll("#files tbody tr").length === 1);
+    await page
+      .locator("#files tbody tr", { hasText: "share-me.txt" })
+      .locator("button", { hasText: "删除" })
+      .click();
     await page.waitForFunction(() => document.querySelectorAll("#files tbody tr").length === 0);
     await context.close();
     await anon.close();

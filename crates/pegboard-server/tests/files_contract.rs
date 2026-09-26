@@ -111,7 +111,7 @@ async fn body_json(response: axum::http::Response<Body>) -> serde_json::Value {
 }
 
 async fn body_bytes(response: axum::http::Response<Body>) -> Vec<u8> {
-    axum::body::to_bytes(response.into_body(), 1024 * 1024)
+    axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
         .await
         .expect("body")
         .to_vec()
@@ -326,6 +326,28 @@ async fn files_isolated_between_apps() {
         .expect("request");
     let r = call(&env, req).await;
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "应用间文件不可互访");
+}
+
+#[tokio::test]
+async fn upload_over_2mb_succeeds() {
+    // axum 默认请求体上限 2MB；上传路由已解除，配额由流式检查执行
+    let env = files_env();
+    let big = vec![0xA5u8; 3 * 1024 * 1024];
+    let r = upload(&env, "big.bin", &big).await;
+    assert_eq!(r.status(), StatusCode::OK, "3MB 上传应成功");
+    let v = body_json(r).await;
+    assert_eq!(v["size"], 3 * 1024 * 1024);
+    // 下载回来内容一致
+    let id = v["id"].as_str().expect("id").to_owned();
+    let req = Request::get(format!("/api/files/{id}"))
+        .header("x-pegboard-app", "t")
+        .body(Body::empty())
+        .expect("request");
+    let r = call(&env, req).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let bytes = body_bytes(r).await;
+    assert_eq!(bytes.len(), big.len());
+    assert!(bytes.iter().all(|&b| b == 0xA5));
 }
 
 #[tokio::test]

@@ -99,7 +99,7 @@ async function upload(file) {
     $("uploading").textContent = "已上传: " + meta.name + " (" + fmtSize(meta.size) + ")";
     await refresh();
   } catch (e) {
-    $("uploading").textContent = "上传失败: " + (e.code || e.message);
+    $("uploading").textContent = "上传失败: " + (e.code ? e.code + " " : "") + (e.message || e);
   }
 }
 
