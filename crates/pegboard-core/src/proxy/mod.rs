@@ -532,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn forwards_get_and_sanitizes() {
-        let server = spawn_mock(|req| async move {
+        let server = spawn_mock(|_req| async move {
             http_response(
                 "200 OK",
                 &[
@@ -568,18 +568,21 @@ mod tests {
             resp.headers.get(http::header::CONTENT_TYPE).unwrap(),
             "application/json"
         );
-        // 出站清理：mock 侧不应收到注入头，应收到 Authorization
-        let captured = server.captured.lock().unwrap();
-        let last = captured.last().unwrap();
-        assert!(last
-            .headers
-            .iter()
-            .all(|(k, _)| k != "x-pegboard-app" && k != "x-forwarded-for"));
-        assert!(last
-            .headers
-            .iter()
-            .any(|(k, v)| k == "authorization" && v == "Bearer k"));
-        drop(captured);
+        // 出站清理：mock 侧不应收到注入头，应收到 Authorization（快照后释放锁）
+        let saw_auth = {
+            let captured = server.captured.lock().unwrap();
+            let last = captured.last().unwrap();
+            let no_injected = last
+                .headers
+                .iter()
+                .all(|(k, _)| k != "x-pegboard-app" && k != "x-forwarded-for");
+            let has_auth = last
+                .headers
+                .iter()
+                .any(|(k, v)| k == "authorization" && v == "Bearer k");
+            no_injected && has_auth
+        };
+        assert!(saw_auth, "出站头清理断言失败");
         // body 透传
         let collected = collect(resp.body).await.unwrap();
         assert_eq!(collected, br#"{"ok":true}"#);
@@ -611,7 +614,9 @@ mod tests {
         let collected = collect(resp.body).await.unwrap();
         assert_eq!(collected, b"hello-proxy-body");
         let captured = server.captured.lock().unwrap();
-        assert_eq!(captured.last().unwrap().body, b"hello-proxy-body");
+        let last = captured.last().unwrap();
+        assert_eq!(last.method, "POST");
+        assert_eq!(last.body, b"hello-proxy-body");
     }
 
     #[tokio::test]
@@ -625,8 +630,10 @@ mod tests {
             out.into_bytes()
         })
         .await;
-        let mut cfg = ProxyConfig::default();
-        cfg.max_body_bytes = 128; // 远小于总大小
+        let cfg = ProxyConfig {
+            max_body_bytes: 128, // 远小于总大小
+            ..ProxyConfig::default()
+        };
         let p = proxy(cfg);
         let a = app(&[&whitelist_entry(server.addr)]);
         let resp = p
@@ -653,8 +660,10 @@ mod tests {
             async move { http_response("200 OK", &[("content-type", "text/plain")], &big) }
         })
         .await;
-        let mut cfg = ProxyConfig::default();
-        cfg.max_body_bytes = 256;
+        let cfg = ProxyConfig {
+            max_body_bytes: 256,
+            ..ProxyConfig::default()
+        };
         let p = proxy(cfg);
         let a = app(&[&whitelist_entry(server.addr)]);
         let r = p
@@ -745,8 +754,10 @@ mod tests {
             http_response("200 OK", &[], "late")
         })
         .await;
-        let mut cfg = ProxyConfig::default();
-        cfg.read_timeout = Duration::from_millis(200);
+        let cfg = ProxyConfig {
+            read_timeout: Duration::from_millis(200),
+            ..ProxyConfig::default()
+        };
         let p = proxy(cfg);
         let a = app(&[&whitelist_entry(server.addr)]);
         let r = p
@@ -764,8 +775,10 @@ mod tests {
     #[tokio::test]
     async fn rate_limited_request_denied() {
         let server = spawn_mock(|_req| async move { http_response("200 OK", &[], "x") }).await;
-        let mut cfg = ProxyConfig::default();
-        cfg.read_timeout = Duration::from_secs(5);
+        let cfg = ProxyConfig {
+            read_timeout: Duration::from_secs(5),
+            ..ProxyConfig::default()
+        };
         let p = Proxy::new(Arc::new(Guard::new()), cfg).unwrap();
         let mut a = app(&[&whitelist_entry(server.addr)]);
         a.limits.net_rps = 2;

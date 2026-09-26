@@ -136,10 +136,9 @@ fn start_upstream() -> (Child, String) {
         .expect("spawn upstream");
     let stdout = child.stdout.take().expect("stdout");
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut base = None;
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
-    loop {
+    let base = loop {
         if Instant::now() > deadline {
             panic!("upstream did not start");
         }
@@ -148,15 +147,14 @@ fn start_upstream() -> (Child, String) {
             Ok(0) => panic!("upstream exited"),
             Ok(_) => {
                 if let Some(rest) = line.strip_prefix("UPSTREAM-READY ") {
-                    base = Some(rest.trim().to_owned());
-                    break;
+                    break rest.trim().to_owned();
                 }
             }
             Err(e) => panic!("read upstream stdout: {e}"),
         }
-    }
+    };
     let _ = child.stdout.take();
-    (child, base.expect("upstream base"))
+    (child, base)
 }
 
 fn stop_upstream(mut child: Child) {
