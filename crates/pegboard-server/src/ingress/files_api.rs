@@ -315,7 +315,7 @@ async fn serve_file_response(
 }
 
 fn async_stream_file(
-    mut file: tokio::fs::File,
+    file: tokio::fs::File,
     len: u64,
 ) -> impl futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     futures_util::stream::unfold((file, len), |(mut file, remaining)| async move {
