@@ -4,8 +4,8 @@
 //! 单个应用损坏不阻塞整体：错误汇总为 warnings 返回，成功项保留。
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::config::Limits;
 
@@ -134,7 +134,10 @@ impl AppRegistry {
                             .push(AppError::DuplicateId(meta.id.clone()));
                     } else {
                         ids.push(meta.id.clone());
-                        outcome.registry.apps.insert(meta.id.clone(), Arc::new(meta));
+                        outcome
+                            .registry
+                            .apps
+                            .insert(meta.id.clone(), Arc::new(meta));
                     }
                 }
                 Err(e) => outcome.warnings.push(e),

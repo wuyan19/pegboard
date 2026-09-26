@@ -129,10 +129,60 @@ impl Default for AuditConfig {
     }
 }
 
+/// 审计共享核心：发送端 + 丢弃计数。
+/// Auditor（拥有写线程）与 AuditorHandle（轻量克隆）共用。
+/// tx 锁仅短持有（取克隆），不跨 await。
+struct AuditorShared {
+    tx: std::sync::Mutex<Option<mpsc::SyncSender<AuditEvent>>>,
+    dropped: AtomicU64,
+}
+
+impl AuditorShared {
+    fn sender(&self) -> Option<mpsc::SyncSender<AuditEvent>> {
+        self.tx
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// 非阻塞投递。队列满时丢弃本条并计数，不阻塞请求路径。
+    fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
+        let Some(tx) = self.sender() else {
+            return Err(AuditError::ChannelClosed);
+        };
+        match tx.try_send(event) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => {
+                let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+                tracing::warn!(dropped_total = n, "audit queue full, event dropped");
+                Ok(())
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => Err(AuditError::ChannelClosed),
+        }
+    }
+}
+
+/// 审计器轻量句柄：可克隆，供 AppState / 各 handler 共享。
+#[derive(Clone)]
+pub struct AuditorHandle {
+    shared: Arc<AuditorShared>,
+}
+
+impl AuditorHandle {
+    /// 非阻塞投递（见 AuditorShared::record）。
+    pub fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
+        self.shared.record(event)
+    }
+
+    /// 队列中被丢弃的事件总数。
+    pub fn dropped(&self) -> u64 {
+        self.shared.dropped.load(Ordering::Relaxed)
+    }
+}
+
 /// 审计器。record 非阻塞；后台线程串行落盘 + 滚动。
 pub struct Auditor {
-    tx: Option<mpsc::SyncSender<AuditEvent>>,
-    dropped: Arc<AtomicU64>,
+    shared: Arc<AuditorShared>,
     writer: Option<std::thread::JoinHandle<()>>,
     config: AuditConfig,
 }
@@ -147,33 +197,34 @@ impl Auditor {
         let writer = std::thread::Builder::new()
             .name("pegboard-audit".to_owned())
             .spawn(move || writer_loop(rx, &writer_config))?;
+        let _ = dropped; // 计数并入共享核心
         Ok(Self {
-            tx: Some(tx),
-            dropped,
+            shared: Arc::new(AuditorShared {
+                tx: std::sync::Mutex::new(Some(tx)),
+                dropped: AtomicU64::new(0),
+            }),
             writer: Some(writer),
             config,
         })
     }
 
-    /// 非阻塞投递。队列满时丢弃本条并计数，不阻塞请求路径。
-    pub fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
-        let Some(tx) = self.tx.as_ref() else {
-            return Err(AuditError::ChannelClosed);
-        };
-        match tx.try_send(event) {
-            Ok(()) => Ok(()),
-            Err(mpsc::TrySendError::Full(_)) => {
-                let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
-                tracing::warn!(dropped_total = n, "audit queue full, event dropped");
-                Ok(())
-            }
-            Err(mpsc::TrySendError::Disconnected(_)) => Err(AuditError::ChannelClosed),
+    /// 轻量句柄：与本体共享发送端与计数器。
+    pub fn handle(&self) -> AuditorHandle {
+        AuditorHandle {
+            shared: Arc::clone(&self.shared),
         }
+    }
+
+    /// 非阻塞投递（等价 handle().record）。
+    pub fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
+        self.shared.record(event)
     }
 
     /// 同步优雅关闭：drop 发送端 → 写线程排空退出 → join。
     pub fn shutdown(mut self) -> Result<(), AuditError> {
-        self.tx = None;
+        if let Ok(mut guard) = self.shared.tx.lock() {
+            *guard = None;
+        }
         if let Some(writer) = self.writer.take() {
             writer.join().map_err(|_| AuditError::WriterPanic)?;
         }
@@ -204,7 +255,7 @@ impl Auditor {
 
     /// 队列中被丢弃的事件总数，用于自监控。
     pub fn dropped(&self) -> u64 {
-        self.dropped.load(Ordering::Relaxed)
+        self.shared.dropped.load(Ordering::Relaxed)
     }
 
     /// 新 → 旧的文件序列：audit.log、audit.log.1、…（共 max_files 份）。

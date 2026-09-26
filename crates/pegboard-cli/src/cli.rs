@@ -36,7 +36,7 @@ pub struct Args {
     pub log: String,
 }
 
-pub fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
+pub async fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let args = Args::parse();
     init_tracing(&args.log);
     let mut config = load_config(&args)?;
@@ -45,7 +45,8 @@ pub fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     if args.check {
         return Ok(check_mode(&config));
     }
-    tracing::warn!("serve 模式尚未接入（M2）；当前版本仅支持 --check");
+    let rt = crate::runtime::build(config).await?;
+    crate::runtime::serve(rt).await?;
     Ok(ExitCode::SUCCESS)
 }
 
