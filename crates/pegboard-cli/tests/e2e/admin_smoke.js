@@ -85,21 +85,29 @@ const BASE = process.argv[2];
           entry: "index.html",
         })
       );
-      await page.fill("#install-id", "xss");
+        await page.fill("#install-id", "xss");
       await page.click("#install");
       await page.waitForFunction(() =>
         document.querySelector("#apps-body").textContent.includes("img src")
       );
-      const pwned = await page.evaluate(() => window.__pwned);
+        const pwned = await page.evaluate(() => window.__pwned);
       assert(!pwned, "清单 name 中的 HTML 不应被执行");
-      // 卸载清理
-      page.once("dialog", (d) => d.accept());
+      // 卸载 → 未安装态；删除 → 彻底移除
+        page.once("dialog", (d) => d.accept());
       await page
         .locator('#apps-body tr', { hasText: "xss" })
         .locator('button[data-act="uninstall"]')
         .click();
       await page.waitForFunction(() =>
-        !document.querySelector("#apps-body").textContent.includes("img src")
+        document.querySelector("#apps-body").textContent.includes("未安装")
+      );
+        page.once("dialog", (d) => d.accept());
+      await page
+        .locator('#apps-body tr', { hasText: "xss" })
+        .locator('button[data-act="delete"]')
+        .click();
+      await page.waitForFunction(() =>
+        !document.querySelector("#apps-body").textContent.includes("xss")
       );
     }
 

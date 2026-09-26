@@ -37,6 +37,7 @@
   button { cursor: pointer; }
   button:hover:not(:disabled) { background: rgba(128,128,128,.12); }
   button:disabled { opacity: .4; cursor: default; }
+  button.danger { color: #d33; border-color: rgba(221,51,51,.5); }
   .muted { color: #888; }
   #status { font-size: 12px; color: #888; }
   .usage-bar { height: 6px; background: rgba(128,128,128,.2); border-radius: 3px; width: 140px; display: inline-block; vertical-align: middle; margin-right: 6px; }
@@ -70,7 +71,7 @@
   <thead><tr><th>应用</th><th>状态</th><th>操作</th></tr></thead>
   <tbody id="apps-body"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody>
 </table>
-<div class="sub">点击行查看详情 · 禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问 · 卸载删除数据目录与签名 token，产物目录保留。</div>
+<div class="sub">点击行查看详情 · 禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问 · 卸载保留产物与数据（重装即恢复），删除不可逆。</div>
 
 <h2>审计日志</h2>
 <div class="sub">能力调用事件（静态访问不入审计）。</div>
@@ -168,7 +169,10 @@ function errorRow(cols, e, retry) {
 
 let appsCache = [];
 
-const STATE_LABEL = { enabled: "启用", disabled: "禁用" };
+const STATE_LABEL = {
+  enabled: "启用", disabled: "禁用",
+  not_installed: "未安装", invalid: "无效", missing: "缺失",
+};
 
 async function loadApps() {
   if (appsInFlight) return;
@@ -186,20 +190,37 @@ async function loadApps() {
       tr.className = "clickable";
       tr.dataset.id = a.id;
       const label = STATE_LABEL[a.state] || a.state;
-      const pillClass = a.state === "enabled" ? "ok" : a.state === "disabled" ? "off" : "dim";
+      const pillClass =
+        a.state === "enabled" ? "ok" :
+        a.state === "disabled" ? "off" :
+        a.state === "invalid" ? "err" : "dim";
+      const registered = a.state === "enabled" || a.state === "disabled";
+      const nameCell = registered
+        ? '<a href="/apps/' + esc(a.id) + '/" target="_blank" title="打开应用">' + esc(a.name) + '</a>' +
+          ' <code class="muted">' + esc(a.id) + '</code>' +
+          '<div class="mono muted">' + esc(a.entry) + '</div>'
+        : '<span>' + esc(a.name) + '</span>' +
+          ' <code class="muted">' + esc(a.id) + '</code>' +
+          (a.error ? '<div class="mono muted">' + esc(a.error) + '</div>' : '');
+      // 状态 → 动词矩阵（数据模型 §9）
+      const acts = [];
+      if (a.state === "enabled") {
+        acts.push('<button data-act="disable" title="禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问">禁用</button>');
+      }
+      if (a.state === "disabled") {
+        acts.push('<button data-act="enable" title="恢复能力 API 访问">启用</button>');
+      }
+      if (a.state === "enabled" || a.state === "disabled" || a.state === "missing") {
+        acts.push('<button data-act="uninstall" title="注销应用并删除签名 token；产物与数据目录保留，重装即恢复">卸载</button>');
+      }
+      if (a.state === "not_installed") {
+        acts.push('<button data-act="install" title="校验清单并注册（注册为启用）">安装</button>');
+      }
+      acts.push('<button data-act="delete" class="danger" title="删除产物目录与数据目录；不可逆">删除</button>');
       tr.innerHTML =
-        "<td><a href=\"/apps/" + esc(a.id) + "/\" target=\"_blank\" title=\"打开应用\">" + esc(a.name) + "</a>" +
-        ' <code class="muted">' + esc(a.id) + "</code>" +
-        '<div class="mono muted">' + esc(a.entry) + "</div></td>" +
+        "<td>" + nameCell + "</td>" +
         '<td><span class="pill ' + pillClass + '">' + esc(label) + "</span></td>" +
-        "<td>" +
-          (a.state === "enabled"
-            ? '<button data-act="disable" title="禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问">禁用</button> '
-            : a.state === "disabled"
-              ? '<button data-act="enable" title="恢复能力 API 访问">启用</button> '
-              : "")
-          + '<button data-act="uninstall" title="注销应用：删除数据目录与签名 token，产物目录保留">卸载</button>' +
-        "</td>";
+        "<td>" + acts.join(" ") + "</td>";
       tbody.appendChild(tr);
     }
     tbody.querySelectorAll("button[data-act]").forEach((b) => {
@@ -208,9 +229,15 @@ async function loadApps() {
         const id = b.closest("tr").dataset.id;
         const act = b.getAttribute("data-act");
         if (act === "uninstall" &&
-            !confirm("卸载 " + id + "：注销应用并删除其数据目录与签名 token，产物目录保留。继续？")) return;
+            !confirm("卸载 " + id + "：注销应用并删除签名 token；产物与数据目录保留，重装即恢复。继续？")) return;
+        if (act === "delete" &&
+            !confirm("删除 " + id + "：移除产物目录与全部数据目录，不可恢复。确定删除？")) return;
         try {
-          await j("/api/admin/apps/" + encodeURIComponent(id) + "/" + act, { method: "POST" });
+          // delete 是 DELETE /api/admin/apps/{id}；其余为 POST /api/admin/apps/{id}/{act}
+          const url = act === "delete"
+            ? "/api/admin/apps/" + encodeURIComponent(id)
+            : "/api/admin/apps/" + encodeURIComponent(id) + "/" + act;
+          await j(url, { method: act === "delete" ? "DELETE" : "POST" });
           await refreshAll();
         } catch (e) {
           alert((e.code ? e.code + " " : "") + e.message);

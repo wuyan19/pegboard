@@ -62,6 +62,17 @@ fn state_with(manifests: &[(&str, &str)]) -> TestEnv {
     let host_db = Arc::new(
         pegboard_core::app::HostDb::open(&root.path().join("data/host.db")).expect("host db"),
     );
+    // 模拟 runtime 首启 seed：注册表写入 host.db 行（真实启动流程见 cli runtime）
+    for meta in outcome.registry.list() {
+        host_db
+            .upsert_app(
+                &meta.id,
+                &meta.name,
+                &meta.root.display().to_string(),
+                &meta.manifest_json(),
+            )
+            .expect("seed host.db");
+    }
     let signer = Arc::new(pegboard_core::files::Signer::new(Arc::clone(&host_db)));
     let limits = config.limits;
     let proxy = pegboard_core::proxy::Proxy::new(
@@ -208,9 +219,65 @@ async fn disable_is_idempotent() {
 }
 
 #[tokio::test]
-async fn uninstall_removes_app_and_data() {
+async fn uninstall_keeps_data_and_reinstall_restores() {
     let env = env();
-    // 先写一条 KV 建库
+    // 写一条 KV 建库
+    let req = Request::put("/api/store/kv/k")
+        .header("x-pegboard-app", "a")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"value":"kept"}"#))
+        .expect("request");
+    let r = build_router(Arc::clone(&env.state))
+        .oneshot(req)
+        .await
+        .expect("oneshot");
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+    // 卸载：注销 + 静态 404；数据目录与产物保留
+    let r = call(&env, Method::POST, "/api/admin/apps/a/uninstall").await;
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    // 卸载后磁盘候选仍有效：详情返回 not_installed 视图
+    let r = call(&env, Method::GET, "/api/admin/apps/a").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let v = body_json(r).await;
+    assert_eq!(v["state"], "not_installed");
+    assert!(
+        env._root.path().join("data/apps_data/a").exists(),
+        "卸载保留数据目录"
+    );
+    assert!(
+        env._root.path().join("apps/a/index.html").exists(),
+        "卸载保留产物"
+    );
+    let r = call(&env, Method::GET, "/api/admin/apps").await;
+    let v = body_json(r).await;
+    let a = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == "a")
+        .expect("a in list");
+    assert_eq!(a["state"], "not_installed");
+
+    // 重装：数据恢复
+    let r = call(&env, Method::POST, "/api/admin/apps/a/install").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let req = Request::get("/api/store/kv/k")
+        .header("x-pegboard-app", "a")
+        .body(Body::empty())
+        .expect("request");
+    let r = build_router(Arc::clone(&env.state))
+        .oneshot(req)
+        .await
+        .expect("oneshot");
+    assert_eq!(r.status(), StatusCode::OK);
+    let v = body_json(r).await;
+    assert_eq!(v["value"], "kept", "重装后 KV 数据应恢复");
+}
+
+#[tokio::test]
+async fn delete_removes_everything() {
+    let env = env();
     let req = Request::put("/api/store/kv/k")
         .header("x-pegboard-app", "a")
         .header("content-type", "application/json")
@@ -222,20 +289,76 @@ async fn uninstall_removes_app_and_data() {
         .expect("oneshot");
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
 
-    let r = call(&env, Method::POST, "/api/admin/apps/a/uninstall").await;
+    let r = call(&env, Method::DELETE, "/api/admin/apps/a").await;
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
-    // 能力 → 404
+    assert!(
+        !env._root.path().join("data/apps_data/a").exists(),
+        "删除移除数据目录"
+    );
+    assert!(
+        !env._root.path().join("apps/a").exists(),
+        "删除移除产物目录"
+    );
     let r = call(&env, Method::GET, "/api/admin/apps/a").await;
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
-    // 数据目录删除、产物保留（磁盘文件在，但应用已注销 → 不再服务）
-    assert!(!env._root.path().join("data/apps_data/a").exists());
-    assert!(env._root.path().join("apps/a/index.html").exists());
-    let r = call(&env, Method::GET, "/apps/a/index.html").await;
-    assert_eq!(
-        r.status(),
-        StatusCode::NOT_FOUND,
-        "注销后不再服务（产物留在磁盘由操作者处理）"
-    );
+    // 删除后列表中不再出现
+    let r = call(&env, Method::GET, "/api/admin/apps").await;
+    let v = body_json(r).await;
+    assert!(v.as_array().unwrap().iter().all(|x| x["id"] != "a"));
+}
+
+#[tokio::test]
+async fn list_shows_all_states() {
+    let env = env();
+    // 未安装候选：装好清单的目录，未注册
+    let dir = env._root.path().join("apps/cand");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("index.html"), "x").expect("write");
+    std::fs::write(
+        dir.join("manifest.json"),
+        r#"{"id":"cand","name":"Cand","entry":"index.html"}"#,
+    )
+    .expect("write");
+    // 无效候选：坏清单
+    let bad = env._root.path().join("apps/broken");
+    std::fs::create_dir_all(&bad).expect("mkdir");
+    std::fs::write(bad.join("manifest.json"), "{ nope").expect("write");
+
+    let r = call(&env, Method::GET, "/api/admin/apps").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let v = body_json(r).await;
+    let items = v.as_array().expect("array");
+    let by_id = |id: &str| items.iter().find(|x| x["id"] == id).cloned();
+    assert_eq!(by_id("a").expect("a")["state"], "enabled");
+    assert_eq!(by_id("cand").expect("cand")["state"], "not_installed");
+    assert_eq!(by_id("cand").unwrap()["name"], "Cand");
+    let broken = by_id("broken").expect("broken");
+    assert_eq!(broken["state"], "invalid");
+    assert!(broken["error"].as_str().is_some_and(|s| !s.is_empty()));
+}
+
+#[tokio::test]
+async fn uninstall_missing_row_only_app() {
+    // 已安装行存在但产物目录被外部删除 → 缺失态可用卸载清理
+    let env = env();
+    // 先禁用（写行），再移除产物目录模拟外部删除
+    call(&env, Method::POST, "/api/admin/apps/a/disable").await;
+    std::fs::remove_dir_all(env._root.path().join("apps/a")).expect("rm");
+    let r = call(&env, Method::GET, "/api/admin/apps").await;
+    let v = body_json(r).await;
+    let a = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == "a")
+        .expect("a");
+    assert_eq!(a["state"], "missing", "{}", a);
+    // 卸载清理残留行
+    let r = call(&env, Method::POST, "/api/admin/apps/a/uninstall").await;
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    let r = call(&env, Method::GET, "/api/admin/apps").await;
+    let v = body_json(r).await;
+    assert!(v.as_array().unwrap().iter().all(|x| x["id"] != "a"));
 }
 
 #[tokio::test]

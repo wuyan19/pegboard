@@ -209,6 +209,15 @@ pub fn validate_id(id: &str) -> Result<(), AppError> {
     }
 }
 
+/// 加载未注册候选：校验清单并返回元数据，不写入任何注册表。
+pub fn load_candidate(
+    apps_dir: &Path,
+    dir_name: &str,
+    default_limits: &Limits,
+) -> Result<AppMeta, AppError> {
+    load_one(apps_dir, dir_name, default_limits)
+}
+
 /// 加载单个应用：目录名即 id 期望值，清单 id 必须一致。
 fn load_one(apps_dir: &Path, dir_name: &str, default_limits: &Limits) -> Result<AppMeta, AppError> {
     validate_id(dir_name)?;

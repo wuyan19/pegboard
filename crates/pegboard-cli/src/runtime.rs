@@ -31,11 +31,49 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
             .map_err(|e| format!("创建 {} 失败: {e}", data_root.join(sub).display()))?;
     }
 
-    // 应用注册表：坏应用告警不阻塞
-    let outcome = AppRegistry::scan(&config.storage.apps_dir, &config.limits)
-        .map_err(|e| format!("扫描 apps 目录失败: {e}"))?;
-    for warning in &outcome.warnings {
-        tracing::error!(error = %warning, "app invalid (skipped)");
+    // host.db 先于注册表：apps 表是「已安装注册表」的权威（数据模型 §6）
+    let host_db = Arc::new(
+        pegboard_core::app::HostDb::open(&data_root.join("host.db"))
+            .map_err(|e| format!("打开 host.db 失败: {e}"))?,
+    );
+
+    // 应用注册表：按 host.db 已安装行加载；首次启动（表为空）seed 安装 apps/ 下全部有效应用
+    let rows = host_db
+        .app_states()
+        .map_err(|e| format!("读取 host.db 应用状态失败: {e}"))?;
+    let mut registry = AppRegistry::default();
+    let mut disabled: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if rows.is_empty() {
+        let outcome = AppRegistry::scan(&config.storage.apps_dir, &config.limits)
+            .map_err(|e| format!("扫描 apps 目录失败: {e}"))?;
+        for warning in &outcome.warnings {
+            tracing::error!(error = %warning, "app invalid (skipped)");
+        }
+        for meta in outcome.registry.list() {
+            host_db
+                .upsert_app(
+                    &meta.id,
+                    &meta.name,
+                    &meta.root.display().to_string(),
+                    &meta.manifest_json(),
+                )
+                .map_err(|e| format!("seed 写入 host.db 失败: {e}"))?;
+            tracing::info!(app_id = %meta.id, "首次启动 seed 安装");
+        }
+        registry = outcome.registry;
+    } else {
+        for (id, (enabled, _)) in rows {
+            match registry.reload_one(&config.storage.apps_dir, &id, &config.limits) {
+                Ok(_) => {
+                    if !enabled {
+                        disabled.insert(id);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, app_id = %id, "已安装应用加载失败（列表中标记缺失/无效）");
+                }
+            }
+        }
     }
 
     // 审计器
@@ -59,19 +97,7 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
         pegboard_core::proxy::ProxyConfig::default(),
     )
     .map_err(|e| format!("构造代理器失败: {e}"))?;
-    let host_db = Arc::new(
-        pegboard_core::app::HostDb::open(&data_root.join("host.db"))
-            .map_err(|e| format!("打开 host.db 失败: {e}"))?,
-    );
     let signer = Arc::new(pegboard_core::files::Signer::new(Arc::clone(&host_db)));
-    // 禁用集合：从 host.db 恢复（能力 API 对禁用应用返回 APP_NOT_FOUND）
-    let disabled: std::collections::HashSet<String> = host_db
-        .app_states()
-        .map_err(|e| format!("读取 host.db 应用状态失败: {e}"))?
-        .into_iter()
-        .filter(|(_, (enabled, _))| !enabled)
-        .map(|(id, _)| id)
-        .collect();
     let state = Arc::new(AppState {
         identity: pegboard_core::identity::Identity::new(&config.identity),
         guard,
@@ -86,7 +112,7 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
         disabled: RwLock::new(disabled),
         proxy: Arc::new(proxy),
         config: config.clone(),
-        apps: RwLock::new(outcome.registry),
+        apps: RwLock::new(registry),
         auditor: audit_handle.clone(),
     });
     let router = build_router(Arc::clone(&state));
