@@ -81,6 +81,10 @@ PLIST
   # ad-hoc 签名：本机双击运行即可（对外分发需 Developer ID + 公证）
   codesign --force --deep --sign - "${APP}" 2>/dev/null || true
   echo "==> .app 完成（codesign ad-hoc）"
+
+  # 升级资产形态（在线升级 macOS 资产 = 整包 .app.zip，ditto 保持 bundle 结构）
+  ditto -c -k --keepParent "${APP}" "dist/Pegboard.app.zip"
+  echo "==> dist/Pegboard.app.zip（在线升级资产）"
 fi
 
 echo "==> 完成：${OUT}"

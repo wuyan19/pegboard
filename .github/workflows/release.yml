@@ -1,0 +1,222 @@
+# 发布流程（在线升级，架构设计 §11）：push v* tag 或手动触发。
+#
+# 链路：四平台构建 → 资产上传 draft release → manifest job 用签名私钥
+# （GitHub Secrets）生成信封式 update-manifest.json → 回传同一 release →
+# 下载自检验签。平台 key 与 server/src/host/update.rs 的 platform_key()
+# 是硬约定，两边改名必须同步。
+#
+# 注意：draft release 不会被 releases/latest 命中——构建完成后必须手动
+# publish release，否则所有已安装的客户端查不到这次更新。
+#
+# 所需 secrets（生成：cargo run --example update_keygen -- --password=<口令>）：
+#   UPDATE_MINISIGN_KEY      ← .sign/pegboard-update.key 文件全文
+#   UPDATE_MINISIGN_PASSWORD ← .sign/pegboard-update.pwd 的口令
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # asset_suffix 是资产名的架构段：最终名 = pegboard-<tag>-<suffix>。
+          - platform: macos-latest # aarch64
+            artifact_name: pegboard
+            asset_suffix: aarch64-macos
+          - platform: macos-13 # x86_64
+            artifact_name: pegboard
+            asset_suffix: x86_64-macos
+          - platform: ubuntu-22.04
+            artifact_name: pegboard
+            asset_suffix: x86_64-linux
+          - platform: windows-latest
+            artifact_name: pegboard.exe
+            asset_suffix: x86_64-windows.exe
+
+    runs-on: ${{ matrix.platform }}
+    env:
+      # tag 统一解析（push tag / workflow_dispatch 两种触发）
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # tray-icon / tao 的 Linux 默认特性需要 GTK 与 appindicator 系统库
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev libdbus-1-dev pkg-config
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      # macOS：package.sh 产出 dist/Pegboard.app（LSUIElement 托盘形态）与
+      # dist/Pegboard.app.zip；在线升级的 macOS 资产 = 整包 .app.zip
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: ./scripts/package.sh
+
+      - name: Upload release asset (macOS)
+        if: runner.os == 'macOS'
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG }}
+          files: dist/Pegboard.app.zip
+          name: pegboard ${{ env.TAG }}
+          draft: true
+
+      # 必须显式 bash：Windows runner 默认 pwsh，${TAG} 会展开为空导致
+      # 资产名与 Upload 的 glob 不匹配 → 资产静默缺失
+      - name: Rename binary (non-macOS)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: cp "target/release/${{ matrix.artifact_name }}" "pegboard-${TAG}-${{ matrix.asset_suffix }}"
+
+      - name: Upload release asset (non-macOS)
+        if: runner.os != 'macOS'
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG }}
+          files: pegboard-${{ env.TAG }}-${{ matrix.asset_suffix }}
+          name: pegboard ${{ env.TAG }}
+          draft: true
+
+  # 等四平台资产上传后：下载回来算 sha256，update_sign 生成签名信封
+  # update-manifest.json，回传同一 release，并做客户端同路径验签自检。
+  manifest:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo build --example 对全依赖图编译（不做 use 剪枝），tray-icon/tao
+      # 的 build 脚本探测 GTK，缺包直接编译失败
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev libdbus-1-dev pkg-config
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Cargo.toml version must match tag
+        run: |
+          CARGO_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          TAG_VER="${TAG#v}"
+          if [ "$CARGO_VER" != "$TAG_VER" ]; then
+            echo "::error::Cargo.toml version ($CARGO_VER) 与 tag ($TAG_VER) 不一致——manifest 版本号取自 tag，会让客户端版本比较错乱"
+            exit 1
+          fi
+
+      # 签名是强制步骤：secrets 缺失直接 fail（无签名的 manifest 会被客户端
+      # 拒绝，静默跳过只会把失败推迟到用户端）。口令经 .pwd 旁路文件传给
+      # 签名工具，不进 argv。
+      - name: Materialize signing key
+        env:
+          UPDATE_MINISIGN_KEY: ${{ secrets.UPDATE_MINISIGN_KEY }}
+          UPDATE_MINISIGN_PASSWORD: ${{ secrets.UPDATE_MINISIGN_PASSWORD }}
+        run: |
+          if [ -z "$UPDATE_MINISIGN_KEY" ]; then
+            echo "::error::缺少 secret UPDATE_MINISIGN_KEY。生成：cargo run --example update_keygen -- --password=<口令>，然后把 .sign/pegboard-update.key 全文与口令分别配到 UPDATE_MINISIGN_KEY / UPDATE_MINISIGN_PASSWORD"
+            exit 1
+          fi
+          if [ -z "$UPDATE_MINISIGN_PASSWORD" ]; then
+            echo "::error::缺少 secret UPDATE_MINISIGN_PASSWORD（即 .sign/pegboard-update.pwd 的口令）"
+            exit 1
+          fi
+          printf '%s' "$UPDATE_MINISIGN_KEY" > "$HOME/.pegboard-update.key"
+          printf '%s' "$UPDATE_MINISIGN_PASSWORD" > "$HOME/.pegboard-update.pwd"
+          chmod 600 "$HOME/.pegboard-update.key" "$HOME/.pegboard-update.pwd"
+          # 指纹诊断（不泄露内容）：核对 secret 是否粘贴完整
+          echo "key 指纹：$(wc -l < "$HOME/.pegboard-update.key") 行，各行长 $(awk '{printf "%s ", length($0)}' "$HOME/.pegboard-update.key")sha256=$(sha256sum "$HOME/.pegboard-update.key" | cut -c1-16)"
+          echo "pwd 指纹：$(wc -c < "$HOME/.pegboard-update.pwd") 字节"
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'pegboard-*' --dir assets
+
+      - name: Build signing tool
+        run: cargo build --release --example update_sign
+
+      # payload 只写 version / notes_url / url / file（本地资产路径）；
+      # size / sha256 / 资产签名由 update_sign 就地计算并填充，最后对 payload
+      # 字节签出信封 {payload, signature}（客户端 server/src/host/update.rs 验签）。
+      - name: Build signed update-manifest.json
+        run: |
+          python3 - << 'EOF'
+          import json, os
+
+          tag = os.environ["TAG"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          # 精确去一次 "v" 前缀（不用 lstrip：它会剥掉所有前导 v）
+          version = tag[1:] if tag.startswith("v") else tag
+
+          def asset(suffix):
+              name = f"pegboard-{tag}-{suffix}"
+              path = os.path.join("assets", name)
+              if not os.path.exists(path):
+                  raise SystemExit(f"资产缺失: {path}")
+              return {
+                  "url": f"https://github.com/{repo}/releases/download/{tag}/{name}",
+                  "file": path,
+              }
+
+          payload = {
+              "version": version,
+              "notes_url": f"https://github.com/{repo}/releases/tag/{tag}",
+              "platforms": {
+                  # 平台 key 与 update.rs platform_key() 硬约定
+                  "macos-aarch64-app": asset("aarch64-macos.app.zip"),
+                  "macos-x86_64-app": asset("x86_64-macos.app.zip"),
+                  "windows-x86_64": asset("x86_64-windows.exe"),
+                  "linux-x86_64": asset("x86_64-linux"),
+              },
+          }
+          with open("payload.json", "w") as f:
+              json.dump(payload, f, indent=2)
+          print("payload written")
+          EOF
+          target/release/examples/update_sign "$HOME/.pegboard-update.key" payload.json update-manifest.json
+
+      - name: Shred signing key
+        if: always()
+        run: rm -f "$HOME/.pegboard-update.key" "$HOME/.pegboard-update.pwd" payload.json
+
+      - name: Upload update-manifest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" update-manifest.json --clobber --repo "$GITHUB_REPOSITORY"
+
+      # smoke 自检：下载刚上传的 manifest，走客户端同一条验签路径
+      - name: Smoke-verify uploaded manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo run --release --example update_verify -- update-manifest.json

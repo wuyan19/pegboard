@@ -3,7 +3,8 @@
 //! 信任锚是**签名**而非更新源 URL：manifest 为 `{payload, signature}` 信封，
 //! payload（版本 + 平台资产表）与资产字节均需通过编译期内嵌公钥的
 //! minisign（Ed25519，verify-only）验签；资产另验 sha256 与声明大小。
-//! 更新源 URL 可配置（`[update] manifest_url`），指向哪都不影响信任判定。
+//! 更新源：开源默认指向 GitHub Releases 的 `latest/download` 稳定端点；
+//! `[update] manifest_url` 可覆盖为自建通道。指向哪都不影响信任判定（签名是锚）。
 //!
 //! 分层（自下而上）：
 //! 1. **纯逻辑**：版本比较 / manifest 解析 / 验签 / hex——无 IO，单测覆盖
@@ -46,6 +47,17 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 /// 下载超时：慢网下 100 MiB 也该在该窗口内完成；超时即 Failed，可重试。
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 const USER_AGENT: &str = concat!("pegboard/", env!("CARGO_PKG_VERSION"));
+
+/// GitHub 发布仓库（开源默认更新源）。仓库名只改这一处；
+/// 配置 `[update] manifest_url` 可覆盖为自建通道。
+const GITHUB_REPO: &str = "wuyan19/pegboard";
+
+/// GitHub 的 `releases/latest/download/<asset>` 稳定重定向端点：走 release CDN，
+/// 不占 REST API 未认证限速（60 次/小时/源 IP）；draft release 不会被 `latest`
+/// 命中——发布后必须 publish，否则客户端查不到更新。
+fn default_manifest_url() -> String {
+    format!("https://github.com/{GITHUB_REPO}/releases/latest/download/update-manifest.json")
+}
 
 // ===== 数据模型 =====
 
@@ -210,6 +222,12 @@ fn verify_signature(data: &[u8], sig_text: &str) -> Result<(), UpdateError> {
     verify_with_keys(data, sig_text, UPDATE_PUBKEYS)
 }
 
+/// 用编译期内嵌公钥验签并解析 manifest（发布链路的 smoke 自检入口，
+/// examples/update_verify.rs 与客户端检查共用同一条验签路径）。
+pub fn verify_signed_manifest(body: &str) -> Result<UpdateManifest, UpdateError> {
+    parse_signed_manifest_with_keys(body, UPDATE_PUBKEYS)
+}
+
 fn parse_signed_manifest_with_keys(
     body: &str,
     keys: &[&str],
@@ -263,7 +281,7 @@ async fn fetch_manifest(client: &reqwest::Client, url: &str) -> Result<String, U
     let status = resp.status();
     if status.as_u16() == 404 {
         return Err(UpdateError::Manifest(
-            "更新清单不存在（更新源尚未发布内容）".into(),
+            "更新清单不存在（尚无已发布 release，或 release 仍是 draft 未 publish）".into(),
         ));
     }
     if !status.is_success() {
@@ -561,15 +579,21 @@ pub struct Updater {
 }
 
 impl Updater {
-    /// manifest_url 为空（未配置更新通道）时升级保持 Idle 且检查返回错误。
+    /// 更新源解析：配置给值用配置（自建通道），留空用内置 GitHub Releases 默认。
     pub fn new(manifest_url: &str, tmp_dir: PathBuf) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| tracing::error!(error = %e, "update http client build failed"))
             .ok();
+        let configured = manifest_url.trim();
+        let resolved = if configured.is_empty() {
+            default_manifest_url()
+        } else {
+            configured.to_owned()
+        };
         Self {
-            manifest_url: Some(manifest_url.trim().to_owned()).filter(|s| !s.is_empty()),
+            manifest_url: Some(resolved),
             client,
             tmp_dir,
             inner: Mutex::new(UpdaterInner {
@@ -587,7 +611,7 @@ impl Updater {
             .phase
             .clone();
         json!({
-            "configured": self.manifest_url.is_some(),
+            "source": self.manifest_url,
             "current": env!("CARGO_PKG_VERSION"),
             "platform": platform_key(),
             "phase": phase,
@@ -597,9 +621,6 @@ impl Updater {
     /// spawn 后台检查（POST /api/admin/update/check）。进行中重复触发 no-op；
     /// 未配置更新源返回 Err（管理端映射 400）。
     pub fn spawn_check(self: &Arc<Self>) -> Result<(), String> {
-        if self.manifest_url.is_none() {
-            return Err("未配置更新源（config [update] manifest_url）".into());
-        }
         if self.client.is_none() {
             return Err("更新客户端初始化失败".into());
         }
@@ -625,7 +646,7 @@ impl Updater {
     }
 
     async fn run_check(&self) {
-        let (Some(client), Some(url)) = (&self.client, &self.manifest_url) else {
+        let (Some(client), Some(url)) = (&self.client, self.manifest_url.as_deref()) else {
             return;
         };
         let outcome = fetch_manifest(client, url).await;
@@ -1008,16 +1029,19 @@ mod tests {
 
     #[tokio::test]
     async fn updater_status_and_guards() {
+        // 空配置 → 内置 GitHub 默认源；配置值 → 原样使用
         let u = Arc::new(Updater::new("", std::env::temp_dir()));
-        assert_eq!(u.status_json()["configured"], false);
-        assert!(u.spawn_check().is_err(), "未配置更新源时检查应拒绝");
+        assert_eq!(u.status_json()["source"], default_manifest_url());
+        assert!(u.spawn_check().is_ok());
         assert!(u.spawn_install().is_err(), "Idle 状态不允许安装");
         let u2 = Arc::new(Updater::new(
             "http://example.test/manifest.json",
             std::env::temp_dir(),
         ));
-        assert_eq!(u2.status_json()["configured"], true);
-        assert!(u2.spawn_check().is_ok());
+        assert_eq!(
+            u2.status_json()["source"],
+            "http://example.test/manifest.json"
+        );
     }
 
     #[test]

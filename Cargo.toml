@@ -12,7 +12,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.78"
 license = "MIT OR Apache-2.0"
-repository = ""
+repository = "https://github.com/wuyan19/pegboard"
 
 # 全 workspace 统一版本。子 crate 通过 `workspace = true` 引用，禁止单独指定。
 [workspace.dependencies]

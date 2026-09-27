@@ -642,9 +642,7 @@ function renderUpdatePhase(v) {
   const phase = v.phase || {};
   switch (phase.state) {
     case "idle":
-      msg.textContent = v.configured
-        ? "未检查"
-        : "更新通道未配置（config [update] manifest_url）";
+      msg.textContent = "更新源: " + (v.source || "未配置");
       break;
     case "checking":
       msg.textContent = "检查更新中…";

@@ -198,7 +198,7 @@ POST /api/admin/update/install       下载 + 校验 + 安装（仅 Available �
 - 是否鉴权由部署配置决定：设置环境变量 `PEGBOARD_ADMIN_TOKEN`（≥16 字符）即对全部管理 API 启用 Bearer 鉴权，未携带或错误返回 401 `TOKEN_INVALID`；未设置时不鉴权（v1 本地模式）。
 - 应用包安装约束：zip 解压后总量 ≤ 256 MiB、条目 ≤ 10000、压缩体 ≤ 100 MiB；包路径经 zip-slip 防护；应用 id 取自包内 manifest.json 且与既有目录/注册表冲突时拒绝。
 - `POST /api/admin/host/restart`：spawn 当前可执行文件（透传启动参数 + 重试窗口环境变量）后本进程优雅退出；托盘模式下由托盘事件循环负责 spawn，无托盘模式由服务端直接 spawn。
-- 在线升级：更新源由配置 `[update] manifest_url` 提供（缺省关闭）；manifest 为信封结构 `{payload, signature}`，payload（版本 + 平台资产表）与资产字节均需通过编译期内嵌公钥的 minisign（Ed25519）验签，资产另验 sha256 与声明大小。`update/status` 的 `phase` 为状态机：`idle | checking | up_to_date | available{version,notes_url,size} | downloading{version,bytes,total} | installing{version} | restart_pending{version} | failed{error}`。下载仅手动触发、不自动轮询；`restart_pending` 后经 `host/restart` 切换新版本。检查/安装进行中重复触发返回 400。
+- 在线升级：更新源默认指向 GitHub Releases 的 `latest/download/update-manifest.json` 稳定端点（仓库名见 server/src/host/update.rs 的 `GITHUB_REPO` 常量），配置 `[update] manifest_url` 可覆盖为自建通道；manifest 为信封结构 `{payload, signature}`，payload（版本 + 平台资产表）与资产字节均需通过编译期内嵌公钥的 minisign（Ed25519）验签，资产另验 sha256 与声明大小。`update/status` 的 `phase` 为状态机：`idle | checking | up_to_date | available{version,notes_url,size} | downloading{version,bytes,total} | installing{version} | restart_pending{version} | failed{error}`。下载仅手动触发、不自动轮询；`restart_pending` 后经 `host/restart` 切换新版本。检查/安装进行中重复触发返回 400。
 
 ## 9. 版本与兼容
 
