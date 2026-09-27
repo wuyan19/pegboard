@@ -77,8 +77,32 @@ futures-util = { version = "0.3.32", default-features = false }
 # ---- 测试 ----
 tempfile = "3.20.0"
 
-# ---- 压缩包（应用包安装） ----
+# ---- 压缩包（应用包安装 + macOS 升级整包解压） ----
 zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
+
+# ---- 系统托盘（进程编排，仅 cli）----
+# tray-icon + tao 为 Tauri 生态标准组合：tao 事件循环必须跑主线程（macOS
+# NSApplication 约束），tokio 服务跑子线程。Linux 由 crate 默认特性带 gtk。
+tray-icon = "0.24"
+tao = "0.35"
+
+# ---- 无终端模式的文件日志（仅 cli）----
+tracing-appender = "0.2"
+
+# ---- 在线升级（放 server：管理 API 需触达）----
+semver = "1.0"
+self-replace = "1.2"
+minisign-verify = "0.2"
+# minisign（完整实现：生成密钥/签名）只在单测与 examples 编译，不进 release 依赖树
+minisign = "0.9"
+
+# ---- Windows 控制台重接（无终端双击启动，仅 windows 目标编译）----
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+] }
 ```
 
 ## 各 crate 的 `Cargo.toml`
@@ -144,11 +168,19 @@ percent-encoding = { workspace = true }
 url = { workspace = true }
 futures-util = { workspace = true }
 tracing = { workspace = true }
+zip = { workspace = true }
+# 在线升级（host 模块）：reqwest 复用代理同款 rustls 客户端栈
+reqwest = { workspace = true, features = ["rustls", "stream"] }
+semver = { workspace = true }
+self-replace = { workspace = true }
+minisign-verify = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process"] }
+# 单测内生成/签发测试密钥对（生产运行时只依赖 minisign-verify）
+minisign = { workspace = true }
 ```
 
 ### `crates/pegboard-cli/Cargo.toml`
@@ -172,7 +204,11 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sig
 axum = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+tracing-appender = { workspace = true }
 thiserror = { workspace = true }
+# 托盘：tao 事件循环主线程 + tray-icon；托盘图标为原生 RGBA 资产（免 image 解码依赖）
+tao = { workspace = true }
+tray-icon = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -181,6 +217,11 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process"] 
 futures-util = { workspace = true }
 url = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+
+# examples/update_keygen.rs / update_sign.rs：升级签名工具（开发机专用，
+# 不进 release 依赖树；客户端运行时只依赖 server 侧的 minisign-verify）
+# [[example]] 所需的 minisign 放此处 dev-dependencies
+minisign = { workspace = true }
 ```
 
 ### `crates/pegboard-sdk/Cargo.toml`
@@ -215,6 +256,12 @@ rust-version.workspace = true
 | `sha2` | 0.11.0 | 内容哈希去重 |
 | `clap` | 4.6.1 | CLI；`derive` + `env` |
 | `tracing-subscriber` | 0.3.23 | `env-filter` + `fmt` |
+| `tray-icon` / `tao` | 0.24 / 0.35 | Tauri 生态托盘标准组合；事件循环主线程，服务子线程 |
+| `tracing-appender` | 0.2 | 无终端模式文件日志（non-blocking 写线程，避免 async 上下文阻塞 IO） |
+| `semver` | 1.0 | 升级版本比较（容忍 `v` 前缀；预发布按语义序） |
+| `self-replace` | 1.2 | 替换运行中的自身二进制（Windows rename dance / Unix inode 语义） |
+| `minisign-verify` | 0.2 | 升级验签（Ed25519，verify-only；与 Tauri updater 同款） |
+| `minisign` | 0.9 | 仅 dev/test：密钥生成与签名工具 |
 
 ## 同步 + 异步的依赖边界
 
