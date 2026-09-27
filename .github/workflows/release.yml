@@ -34,12 +34,11 @@ jobs:
       matrix:
         include:
           # asset_suffix 是资产名的架构段：最终名 = pegboard-<tag>-<suffix>。
-          - platform: macos-latest # aarch64
+          # macOS 双架构在 arm64 runner 上一 job 产出（macos-13 x64 runner 已
+          # 停止扩充，队列不可用；x86_64 走 cross 编译）
+          - platform: macos-latest
             artifact_name: pegboard
-            asset_suffix: aarch64-macos
-          - platform: macos-13 # x86_64
-            artifact_name: pegboard
-            asset_suffix: x86_64-macos
+            asset_suffix: macos
           - platform: ubuntu-22.04
             artifact_name: pegboard
             asset_suffix: x86_64-linux
@@ -67,17 +66,30 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
-      # macOS：package.sh 产出 dist/Pegboard.app（LSUIElement 托盘形态）与
-      # dist/Pegboard.app.zip；在线升级的 macOS 资产 = 整包 .app.zip。
-      # 资产名必须带 tag 与架构段（manifest job 的 python 按此约定定位）
-      - name: Package (macOS)
+      # macOS：一个 job 出双架构整包（原生 aarch64 + cross x86_64）。
+      # package.sh 产出 dist/Pegboard.app 与 dist/Pegboard.app.zip；资产名带
+      # tag 与架构段（manifest job 的 python 按此约定定位）
+      - name: Package (macOS aarch64 native)
         if: runner.os == 'macOS'
-        run: ./scripts/package.sh
+        run: |
+          rustup target add x86_64-apple-darwin
+          ./scripts/package.sh
 
-      - name: Rename macOS asset
+      - name: Rename aarch64 asset
         if: runner.os == 'macOS'
         shell: bash
-        run: cp dist/Pegboard.app.zip "pegboard-${TAG}-${{ matrix.asset_suffix }}.app.zip"
+        run: cp dist/Pegboard.app.zip "pegboard-${TAG}-aarch64-macos.app.zip"
+
+      - name: Package (macOS x86_64 cross)
+        if: runner.os == 'macOS'
+        env:
+          PEGBOARD_BUILD_TARGET: x86_64-apple-darwin
+        run: ./scripts/package.sh
+
+      - name: Rename x86_64 asset
+        if: runner.os == 'macOS'
+        shell: bash
+        run: cp dist/Pegboard.app.zip "pegboard-${TAG}-x86_64-macos.app.zip"
 
       - name: Upload release asset (macOS)
         if: runner.os == 'macOS'
@@ -86,7 +98,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.TAG }}
-          files: pegboard-${{ env.TAG }}-${{ matrix.asset_suffix }}.app.zip
+          files: pegboard-${{ env.TAG }}-*.app.zip
           name: pegboard ${{ env.TAG }}
           draft: true
 

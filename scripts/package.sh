@@ -10,14 +10,23 @@ cd "$(dirname "$0")/.."
 VERSION="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys;print(json.load(sys.stdin)["packages"][0]["version"])')"
 OUT="dist/pegboard-${VERSION}"
 
-echo "==> cargo build --release"
-cargo build --release -p pegboard-cli
+# 可选交叉目标（macOS 双架构互编）：PEGBOARD_BUILD_TARGET=x86_64-apple-darwin
+TARGET_SPEC="${PEGBOARD_BUILD_TARGET:-}"
+if [[ -n "$TARGET_SPEC" ]]; then
+  echo "==> cargo build --release --target ${TARGET_SPEC}"
+  cargo build --release -p pegboard-cli --target "${TARGET_SPEC}"
+  BIN="target/${TARGET_SPEC}/release/pegboard"
+else
+  echo "==> cargo build --release"
+  cargo build --release -p pegboard-cli
+  BIN="target/release/pegboard"
+fi
 
 echo "==> 组装 ${OUT}"
 rm -rf "${OUT}"
 mkdir -p "${OUT}"
 
-cp target/release/pegboard "${OUT}/pegboard"
+cp "${BIN}" "${OUT}/pegboard"
 chmod +x "${OUT}/pegboard"
 
 # 应用目录（示例与用户应用）
@@ -36,7 +45,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   rm -rf "${APP}"
   mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 
-  cp target/release/pegboard "${APP}/Contents/MacOS/pegboard"
+  cp "${BIN}" "${APP}/Contents/MacOS/pegboard"
   chmod +x "${APP}/Contents/MacOS/pegboard"
 
   # 图标：assets/icon.png → icns（需要 iconutil + sips，macOS 自带）
