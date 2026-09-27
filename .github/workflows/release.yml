@@ -90,6 +90,10 @@ jobs:
           name: pegboard ${{ env.TAG }}
           draft: true
 
+      - name: Build (non-macOS)
+        if: runner.os != 'macOS'
+        run: cargo build --release
+
       # 必须显式 bash：Windows runner 默认 pwsh，${TAG} 会展开为空导致
       # 资产名与 Upload 的 glob 不匹配 → 资产静默缺失
       - name: Rename binary (non-macOS)
