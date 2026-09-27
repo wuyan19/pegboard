@@ -43,6 +43,8 @@ pub struct AppState {
     pub disabled: RwLock<HashSet<String>>,
     /// 进程控制（重启宿主）；实现属进程层（cli），单测用 NoControl
     pub control: Arc<dyn crate::host::ProcessControl>,
+    /// 在线升级状态机（更新源未配置时保持 Idle）
+    pub update: Arc<crate::host::update::Updater>,
 }
 
 impl AppState {

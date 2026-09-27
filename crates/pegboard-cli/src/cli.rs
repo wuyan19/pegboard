@@ -154,7 +154,7 @@ fn init_tracing(
 ) -> Option<tracing_appender::non_blocking::WorkerGuard> {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::{EnvFilter, fmt};
+    use tracing_subscriber::{fmt, EnvFilter};
 
     let filter = EnvFilter::try_new(level).unwrap_or_else(|_| EnvFilter::new("info"));
     let stdout_layer = fmt::layer().with_ansi(has_tty);
@@ -183,7 +183,9 @@ fn init_tracing(
 
 /// host.log 超 8 MiB 时轮转为 host.log.1（覆盖上一代）。启动时一次性执行。
 fn rotate_if_large(path: &Path, max: u64) {
-    let oversize = std::fs::metadata(path).map(|m| m.len() > max).unwrap_or(false);
+    let oversize = std::fs::metadata(path)
+        .map(|m| m.len() > max)
+        .unwrap_or(false);
     if oversize {
         let rotated = path.with_extension("log.1");
         if let Err(e) = std::fs::rename(path, &rotated) {
@@ -217,8 +219,7 @@ fn prepare_bundle() -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
     let Some(base) = bundle_base_dir() else {
         return Ok(None);
     };
-    std::fs::create_dir_all(&base)
-        .map_err(|e| format!("创建 {} 失败: {e}", base.display()))?;
+    std::fs::create_dir_all(&base).map_err(|e| format!("创建 {} 失败: {e}", base.display()))?;
 
     // 配置模板：首次落一份（已有用户配置则不动）
     let cfg_path = base.join("config.toml");
@@ -238,8 +239,12 @@ fn prepare_bundle() -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
             for entry in entries.filter_map(Result::ok) {
                 let dest = target.join(entry.file_name());
                 if !dest.exists() {
-                    copy_dir_all(&entry.path(), &dest)
-                        .map_err(|e| format!("合并内置应用 {} 失败: {e}", entry.file_name().to_string_lossy()))?;
+                    copy_dir_all(&entry.path(), &dest).map_err(|e| {
+                        format!(
+                            "合并内置应用 {} 失败: {e}",
+                            entry.file_name().to_string_lossy()
+                        )
+                    })?;
                     tracing::info!(app = %entry.file_name().to_string_lossy(), "bundle 内置应用已合并");
                 }
             }
@@ -293,22 +298,20 @@ fn bundle_base_dir() -> Option<PathBuf> {
 }
 
 /// 平台用户数据目录：macOS Application Support / Windows APPDATA / Linux XDG。
-#[allow(unused_assignments)]
 fn platform_base_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        return std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
     }
     #[cfg(windows)]
     {
-        return std::env::var_os("APPDATA").map(PathBuf::from);
+        std::env::var_os("APPDATA").map(PathBuf::from)
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        if let Some(x) = std::env::var_os("XDG_DATA_HOME") {
-            return Some(PathBuf::from(x));
-        }
-        return std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"));
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
     }
 }
 

@@ -4,6 +4,8 @@
 //! 托盘模式下必须由托盘事件循环 spawn（tao 的 `event_loop.run()` 不返回，
 //! 退出路径只能在其事件处理器内），无头模式由 cli 直接 spawn。服务层不关心差异。
 
+pub mod update;
+
 /// 宿主进程控制。实现必须可在任意线程调用（axum handler 触发）。
 pub trait ProcessControl: Send + Sync {
     /// 请求以相同启动参数重启宿主进程；成功返回后本进程将优雅退出

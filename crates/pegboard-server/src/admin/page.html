@@ -224,6 +224,14 @@
   </table>
 </div>
 
+<h2>宿主 <span class="count" id="host-version"></span></h2>
+<div class="bar">
+  <button id="update-check">检查更新</button>
+  <span class="muted" id="update-msg" aria-live="polite"></span>
+  <button id="update-install" hidden>下载并安装</button>
+  <button id="host-restart" hidden class="danger" title="重启宿主进程以切换新版本">重启宿主</button>
+</div>
+
 <!-- 应用详情模态框 -->
 <div id="modal" hidden>
   <div id="modal-backdrop"></div>
@@ -618,6 +626,107 @@ for (const id of ["f-app", "f-action", "f-outcome", "f-limit"]) {
   });
 }
 
+// ---------- 宿主升级（仅手动触发）----------
+
+let lastPhase = null;
+let updatePolling = false;
+
+function renderUpdatePhase(v) {
+  lastPhase = v;
+  $("host-version").textContent = "v" + v.current;
+  const msg = $("update-msg");
+  const install = $("update-install");
+  const restart = $("host-restart");
+  install.hidden = true;
+  restart.hidden = true;
+  const phase = v.phase || {};
+  switch (phase.state) {
+    case "idle":
+      msg.textContent = v.configured
+        ? "未检查"
+        : "更新通道未配置（config [update] manifest_url）";
+      break;
+    case "checking":
+      msg.textContent = "检查更新中…";
+      break;
+    case "up_to_date":
+      msg.textContent = "已是最新版本";
+      break;
+    case "available":
+      msg.innerHTML = "发现新版本 <strong>" + esc(phase.version) + "</strong>（" +
+        fmtBytes(phase.size) + "）" +
+        (phase.notes_url
+          ? ' <a href="' + esc(phase.notes_url) + '" target="_blank" rel="noopener noreferrer">更新日志 ↗</a>'
+          : "");
+      install.hidden = false;
+      break;
+    case "downloading":
+      msg.textContent = "下载 " + phase.version + " " + fmtBytes(phase.bytes) + " / " + fmtBytes(phase.total);
+      break;
+    case "installing":
+      msg.textContent = "安装 " + phase.version + " …";
+      break;
+    case "restart_pending":
+      msg.textContent = "新版本 " + esc(phase.version) + " 已就位，重启宿主后生效";
+      restart.hidden = false;
+      break;
+    case "failed":
+      msg.innerHTML = '<span class="pill err">失败</span> ' + esc(phase.error);
+      break;
+    default:
+      msg.textContent = "";
+  }
+}
+
+async function pollUpdateOnce() {
+  try {
+    renderUpdatePhase(await j("/api/admin/update/status"));
+  } catch (e) {
+    $("update-msg").textContent = "状态获取失败: " + (e.message || e);
+  }
+}
+
+// 检查/下载/安装期间 1s 轮询，进入终态即停
+async function pollWhileActive() {
+  if (updatePolling) return;
+  updatePolling = true;
+  for (;;) {
+    await pollUpdateOnce();
+    const state = (lastPhase && lastPhase.phase && lastPhase.phase.state) || "";
+    if (!["checking", "downloading", "installing"].includes(state)) break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  updatePolling = false;
+}
+
+$("update-check").addEventListener("click", async () => {
+  try {
+    await j("/api/admin/update/check", { method: "POST" });
+  } catch (e) {
+    $("update-msg").innerHTML = '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
+    return;
+  }
+  pollWhileActive();
+});
+$("update-install").addEventListener("click", async () => {
+  try {
+    await j("/api/admin/update/install", { method: "POST" });
+  } catch (e) {
+    $("update-msg").innerHTML = '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
+    return;
+  }
+  pollWhileActive();
+});
+$("host-restart").addEventListener("click", async () => {
+  if (!confirm("重启宿主进程？短暂中断后自动恢复（页面会自动重连）。")) return;
+  try {
+    await j("/api/admin/host/restart", { method: "POST" });
+    $("update-msg").textContent = "重启中…";
+  } catch (e) {
+    $("update-msg").innerHTML = '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
+  }
+});
+
 // ---------- 刷新 ----------
 
 let appsInFlight = false;
@@ -635,7 +744,7 @@ function loadStatus() {
 }
 
 async function refreshAll() {
-  await Promise.allSettled([loadApps(), loadLogs(), loadStatus()]);
+  await Promise.allSettled([loadApps(), loadLogs(), loadStatus(), pollUpdateOnce()]);
 }
 
 $("refresh").addEventListener("click", refreshAll);

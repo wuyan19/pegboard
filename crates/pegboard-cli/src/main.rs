@@ -2,7 +2,10 @@
 
 // release 模式（Windows）用 GUI 子系统：双击不弹终端黑窗；从 cmd/PowerShell 启动时
 // 由 console 模块重接父控制台恢复输出。debug 模式保留控制台便于开发。
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 mod cli;
 mod console;

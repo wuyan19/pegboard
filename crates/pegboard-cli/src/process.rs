@@ -19,7 +19,9 @@ pub fn spawn_restart_child() -> Result<(), String> {
     let mut cmd = std::process::Command::new(exe);
     cmd.args(std::env::args().skip(1));
     cmd.env(RESTART_CHILD_ENV, "1");
-    cmd.spawn().map(|_| ()).map_err(|e| format!("spawn 新进程失败: {e}"))
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("spawn 新进程失败: {e}"))
 }
 
 /// 无头模式的进程控制：直接 spawn 新进程，成功后通知本进程优雅退出。

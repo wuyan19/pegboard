@@ -508,8 +508,9 @@ mod tests {
             config,
             apps: std::sync::RwLock::new(outcome.registry),
             auditor,
-                control: Arc::new(crate::host::NoControl),
-    });
+            control: Arc::new(crate::host::NoControl),
+            update: Arc::new(crate::host::update::Updater::new("", std::env::temp_dir())),
+        });
         TestEnv { _root: root, state }
     }
 

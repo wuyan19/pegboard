@@ -175,6 +175,7 @@ reqwest = { workspace = true, features = ["rustls", "stream"] }
 semver = { workspace = true }
 self-replace = { workspace = true }
 minisign-verify = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
@@ -221,8 +222,9 @@ tokio-tungstenite = { workspace = true, features = ["connect", "handshake", "rus
 
 # examples/update_keygen.rs / update_sign.rs：升级签名工具（开发机专用，
 # 不进 release 依赖树；客户端运行时只依赖 server 侧的 minisign-verify）
-# [[example]] 所需的 minisign 放此处 dev-dependencies
 minisign = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 ```
 
 ### `crates/pegboard-sdk/Cargo.toml`

@@ -29,6 +29,7 @@ reqwest = { workspace = true, features = ["rustls", "stream"] }
 semver = { workspace = true }
 self-replace = { workspace = true }
 minisign-verify = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

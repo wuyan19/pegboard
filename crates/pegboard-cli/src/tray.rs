@@ -89,11 +89,16 @@ fn run_event_loop(event_loop: EventLoop<TrayEvent>, config: Config) -> ! {
         let notify = Arc::clone(&notify);
         let stopped = Arc::clone(&stopped);
         let proxy = proxy.clone();
-        let control: Arc<dyn ProcessControl> = Arc::new(TrayControl { proxy: proxy.clone() });
+        let control: Arc<dyn ProcessControl> = Arc::new(TrayControl {
+            proxy: proxy.clone(),
+        });
         std::thread::Builder::new()
             .name("pegboard-server".to_owned())
             .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+                let rt = match tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                {
                     Ok(rt) => rt,
                     Err(e) => {
                         tracing::error!(error = %e, "tokio runtime 初始化失败");
@@ -133,7 +138,12 @@ fn run_event_loop(event_loop: EventLoop<TrayEvent>, config: Config) -> ! {
     let open_admin = MenuItem::new("打开管理页", true, None);
     let open_apps = MenuItem::new("打开应用目录", true, None);
     let quit = MenuItem::new("退出", true, None);
-    let _ = menu.append_items(&[&open_admin, &open_apps, &PredefinedMenuItem::separator(), &quit]);
+    let _ = menu.append_items(&[
+        &open_admin,
+        &open_apps,
+        &PredefinedMenuItem::separator(),
+        &quit,
+    ]);
 
     let menu_proxy = proxy.clone();
     MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -214,8 +224,8 @@ fn build_tray_icon(menu: &Menu) -> Result<tray_icon::TrayIcon, String> {
     if RGBA.len() != (SIZE * SIZE * 4) as usize {
         return Err(format!("tray-icon.rgba 尺寸异常: {} bytes", RGBA.len()));
     }
-    let icon = tray_icon::Icon::from_rgba(RGBA.to_vec(), SIZE, SIZE)
-        .map_err(|e| format!("icon: {e}"))?;
+    let icon =
+        tray_icon::Icon::from_rgba(RGBA.to_vec(), SIZE, SIZE).map_err(|e| format!("icon: {e}"))?;
     TrayIconBuilder::new()
         .with_menu(Box::new(menu.clone()))
         .with_tooltip("Pegboard 宿主")

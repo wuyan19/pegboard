@@ -17,6 +17,15 @@ pub struct Config {
     pub identity: IdentityConfig,
     pub limits: Limits,
     pub storage: StorageConfig,
+    pub update: UpdateConfig,
+}
+
+/// 在线升级配置。manifest_url 为空 = 更新通道关闭（v1 默认）；
+/// 内容真实性由编译期内嵌公钥的 minisign 验签保证，URL 只决定去哪取。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct UpdateConfig {
+    pub manifest_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

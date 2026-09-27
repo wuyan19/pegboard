@@ -20,3 +20,8 @@ apps_dir = "./apps"
 
 # 管理页鉴权（可选）：设置环境变量 PEGBOARD_ADMIN_TOKEN（≥16 字符）后，
 # 全部 /api/admin/* 端点要求 Authorization: Bearer <token>。lan 部署建议配置。
+
+# 在线升级（可选）：更新源 manifest 地址（信封 {payload, signature}，需用
+# update_keygen/update_sign 私钥签名；公钥编译期内嵌）。留空 = 通道关闭。
+# [update]
+# manifest_url = "https://example.com/pegboard/update-manifest.json"

@@ -35,6 +35,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/admin/apps/{id}/disable", post(disable_app))
         .route("/api/admin/logs", get(list_logs))
         .route("/api/admin/host/restart", post(host_restart))
+        .route("/api/admin/update/status", get(update_status))
+        .route("/api/admin/update/check", post(update_check))
+        .route("/api/admin/update/install", post(update_install))
 }
 
 /// multipart 错误映射：长度类 → 413，其余 → 400。
@@ -572,6 +575,31 @@ async fn host_restart(State(state): State<Arc<AppState>>) -> Result<Response, Ap
             ))
         }
     }
+}
+
+/// 升级状态机当前值（管理页轮询；仅检查/安装进行期间轮询）。
+async fn update_status(State(state): State<Arc<AppState>>) -> Response {
+    (StatusCode::OK, Json(state.update.status_json())).into_response()
+}
+
+/// 手动触发检查（幂等：进行中重复触发 no-op）。未配置更新源 → 400。
+async fn update_check(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
+    state
+        .update
+        .spawn_check()
+        .map_err(|e| ApiError::new(code::INVALID_REQUEST, 400, e))?;
+    audit_admin(&state, "update-check", Outcome::Ok, None);
+    Ok((StatusCode::OK, Json(json!({"ok": true}))).into_response())
+}
+
+/// 手动触发下载+安装（仅 Available 状态；校验失败落 Failed 状态可重试）。
+async fn update_install(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
+    state
+        .update
+        .spawn_install()
+        .map_err(|e| ApiError::new(code::INVALID_REQUEST, 400, e))?;
+    audit_admin(&state, "update-install", Outcome::Ok, None);
+    Ok((StatusCode::OK, Json(json!({"ok": true}))).into_response())
 }
 
 fn audit_admin(state: &Arc<AppState>, app_id: &str, outcome: Outcome, error_code: Option<&str>) {

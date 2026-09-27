@@ -136,6 +136,10 @@ pub async fn build(
         apps: RwLock::new(registry),
         auditor: audit_handle.clone(),
         control,
+        update: Arc::new(pegboard_server::host::update::Updater::new(
+            &config.update.manifest_url,
+            data_root.join("tmp"),
+        )),
     });
     let router = build_router(Arc::clone(&state));
 
@@ -173,7 +177,9 @@ async fn bind_listener(
                 tokio::time::sleep(RESTART_BIND_WAIT).await;
             }
             Err(e) => {
-                return Err(format!("绑定 {addr} 失败（重试 {RESTART_BIND_RETRIES} 次后）: {e}").into())
+                return Err(
+                    format!("绑定 {addr} 失败（重试 {RESTART_BIND_RETRIES} 次后）: {e}").into(),
+                )
             }
         }
     }

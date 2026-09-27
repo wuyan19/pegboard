@@ -115,6 +115,10 @@ fn state_full(
         apps: std::sync::RwLock::new(outcome.registry),
         auditor: handle,
         control,
+        update: Arc::new(pegboard_server::host::update::Updater::new(
+            "",
+            std::env::temp_dir(),
+        )),
     });
     TestEnv { _root: root, state }
 }
@@ -167,7 +171,13 @@ impl pegboard_server::host::ProcessControl for RecordingControl {
 #[tokio::test]
 async fn host_restart_invokes_process_control() {
     let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let env = state_full(&[], None, Arc::new(RecordingControl { called: Arc::clone(&called) }));
+    let env = state_full(
+        &[],
+        None,
+        Arc::new(RecordingControl {
+            called: Arc::clone(&called),
+        }),
+    );
     let r = call(&env, Method::POST, "/api/admin/host/restart").await;
     assert_eq!(r.status(), StatusCode::OK);
     let v = body_json(r).await;
