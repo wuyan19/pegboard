@@ -25,7 +25,9 @@ git clone https://github.com/wuyan19/pegboard && cd pegboard
 cargo run --release -p pegboard-cli
 ```
 
-打开 `http://127.0.0.1:8787`（监听与数据目录见 `config.example.toml`，复制为 `config.toml` 修改；管理页在 `/admin`）。
+打开 `http://127.0.0.1:8787`（管理页在 `/admin`）。
+
+配置发现链：`--config` / `$PEGBOARD_CONFIG` → `./config.toml` → 平台配置目录 → 全默认。数据与应用目录默认落在平台数据区（macOS `~/Library/Application Support/Pegboard`、Linux XDG、Windows `%APPDATA%`）；cwd 放置 `config.toml`（复制 `config.example.toml`）则保持开发树惯例（相对路径相对 cwd）。
 
 常用 CLI 参数：
 

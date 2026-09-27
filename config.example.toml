@@ -1,3 +1,10 @@
+# Pegboard 配置示例。
+# 配置发现链：--config / $PEGBOARD_CONFIG → ./config.toml（开发树）→
+# 平台配置目录（macOS ~/Library/Application Support/Pegboard、Linux
+# ~/.config/pegboard、Windows %APPDATA%/Pegboard）→ 全默认。
+# 命中平台配置目录或全默认时，下方相对路径重定基到平台数据区；
+# cwd 配置的相对路径相对 cwd（开发树行为）。
+
 [server]
 listen = "127.0.0.1:8787"
 mode = "local"

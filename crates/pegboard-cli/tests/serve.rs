@@ -188,7 +188,8 @@ async fn bad_app_alongside_good_still_serves() {
 }
 
 #[test]
-fn serve_missing_apps_dir_fails() {
+fn serve_missing_apps_dir_is_created() {
+    // 发布形态首跑友好：apps 目录缺失时自动创建（配置发现链，实施文档 M8）
     let root = TempDir::new().unwrap();
     let config = root.path().join("config.toml");
     std::fs::write(
@@ -200,16 +201,35 @@ fn serve_missing_apps_dir_fails() {
         ),
     )
     .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_pegboard"))
-        .arg("--config")
-        .arg(&config)
-        .output()
-        .expect("run");
-    assert!(!out.status.success());
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pegboard"))
+        .args(["--config", config.to_str().unwrap(), "--no-tray"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn");
+    let stdout = child.stdout.take().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    loop {
+        assert!(Instant::now() <= deadline, "server did not start");
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => panic!("server exited early"),
+            Ok(_) => {
+                if line.contains("listening") {
+                    break;
+                }
+            }
+            Err(e) => panic!("read stdout: {e}"),
+        }
+    }
+    assert!(
+        root.path().join("missing-apps").is_dir(),
+        "apps 目录应被自动创建"
     );
-    assert!(text.contains("apps"), "{text}");
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status();
+    let _ = child.wait();
 }

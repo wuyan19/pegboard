@@ -51,17 +51,11 @@ pub struct Args {
 pub fn run(has_tty: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // .app bundle（双击）形态：cwd 是 `/` 且升级会整包替换 bundle——配置与应用、
-    // 数据目录固定到用户数据区（见 bootstrap_bundle）。显式 --config 时完全尊重
-    // 手动配置，跳过引导。
-    let bundle_base = if args.config.is_none() && std::env::var_os("PEGBOARD_CONFIG").is_none() {
-        prepare_bundle()?
-    } else {
-        None
-    };
-
-    let mut config = load_config(&args, bundle_base.as_deref())?;
-    if let Some(base) = &bundle_base {
+    // 配置与存储目录解析（resolve_config）：显式配置永远最高优先；
+    // 开发树（cwd 有 config.toml）行为不变；发布形态落到平台数据区。
+    let resolved = resolve_config(&args)?;
+    let mut config = pegboard_core::config::load(resolved.config_path.as_deref())?;
+    if let Some(base) = &resolved.rebase {
         rebase_storage(&mut config, base);
     }
     apply_overrides(&args, &mut config);
@@ -81,6 +75,13 @@ pub fn run(has_tty: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
     // guard 必须存活到进程结束（持于本函数栈帧，serve 期间不返回）。
     let _log_guard = init_tracing(&args.log, has_tty, Some(&logs_dir));
     tracing::info!(has_tty, no_tray = args.no_tray, "pegboard starting");
+
+    // 应用产物目录缺失则创建（发布形态首跑友好；权限错误仍 fail-fast）
+    if !config.storage.apps_dir.exists() {
+        std::fs::create_dir_all(&config.storage.apps_dir)
+            .map_err(|e| format!("创建 {} 失败: {e}", config.storage.apps_dir.display()))?;
+        tracing::info!(apps_dir = %config.storage.apps_dir.display(), "apps 目录不存在，已创建");
+    }
 
     tracing::info!(
         apps_dir = %config.storage.apps_dir.display(),
@@ -194,23 +195,56 @@ fn rotate_if_large(path: &Path, max: u64) {
     }
 }
 
-fn load_config(
-    args: &Args,
-    bundle_base: Option<&Path>,
-) -> Result<Config, Box<dyn std::error::Error>> {
-    let path = args.config.clone().or_else(|| {
-        // bundle 形态优先用用户数据区配置（bootstrap 已拷入）
-        if let Some(base) = bundle_base {
-            let cfg = base.join("config.toml");
-            if cfg.exists() {
-                return Some(cfg);
-            }
+/// 配置与存储目录解析结果。
+struct Resolved {
+    /// 实际加载的配置文件（None = 全默认值）
+    config_path: Option<PathBuf>,
+    /// 相对存储路径的重定基目录（bundle 数据区 / 平台数据区）
+    rebase: Option<PathBuf>,
+}
+
+/// 配置发现链：显式（--config / $PEGBOARD_CONFIG，clap env 已并入）→ bundle
+/// 数据区 → cwd（开发树惯例）→ 平台配置目录 → 全默认（平台数据区）。
+///
+/// 重定基规则：bundle / 平台配置目录 / 全默认命中时，相对存储路径重定基到
+/// 对应数据区——发布的宿主不在 cwd 撒文件；显式与 cwd 配置保持相对 cwd
+/// （开发树行为不变）。
+fn resolve_config(args: &Args) -> Result<Resolved, Box<dyn std::error::Error>> {
+    if args.config.is_some() {
+        return Ok(Resolved {
+            config_path: args.config.clone(),
+            rebase: None,
+        });
+    }
+    // .app bundle（双击）：cwd 是 `/` 且升级会整包替换 bundle——引导把配置与
+    // 内置应用合并进平台数据区（prepare_bundle）
+    if let Some(base) = prepare_bundle()? {
+        let cfg = base.join("config.toml");
+        return Ok(Resolved {
+            config_path: cfg.exists().then_some(cfg),
+            rebase: Some(base),
+        });
+    }
+    let cwd = PathBuf::from("./config.toml");
+    if cwd.exists() {
+        return Ok(Resolved {
+            config_path: Some(cwd),
+            rebase: None,
+        });
+    }
+    if let Some(dir) = platform_config_dir() {
+        let cfg = dir.join("config.toml");
+        if cfg.exists() {
+            return Ok(Resolved {
+                config_path: Some(cfg),
+                rebase: platform_data_dir(),
+            });
         }
-        let cwd = PathBuf::from("./config.toml");
-        cwd.exists().then_some(cwd)
-    });
-    let config = pegboard_core::config::load(path.as_deref())?;
-    Ok(config)
+    }
+    Ok(Resolved {
+        config_path: None,
+        rebase: platform_data_dir(),
+    })
 }
 
 /// .app bundle 引导：定位 bundle、准备用户数据区（配置模板 + 内置应用合并）。
@@ -297,7 +331,7 @@ fn bundle_base_dir() -> Option<PathBuf> {
     platform_base_dir().map(|p| p.join("Pegboard"))
 }
 
-/// 平台用户数据目录：macOS Application Support / Windows APPDATA / Linux XDG。
+/// 平台用户数据根（Application Support / APPDATA / XDG data）。
 fn platform_base_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -312,6 +346,42 @@ fn platform_base_dir() -> Option<PathBuf> {
         std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+    }
+}
+
+/// 平台配置目录（发现的 config.toml 落点）。macOS/Windows 与数据同区；
+/// Linux 按 XDG 惯例区分 config 与 data。
+fn platform_config_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        platform_base_dir().map(|p| p.join("Pegboard"))
+    }
+    #[cfg(windows)]
+    {
+        platform_base_dir().map(|p| p.join("Pegboard"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .map(|p| p.join("pegboard"))
+    }
+}
+
+/// 平台数据目录（无配置时的默认存储基）。
+fn platform_data_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        platform_base_dir().map(|p| p.join("Pegboard"))
+    }
+    #[cfg(windows)]
+    {
+        platform_base_dir().map(|p| p.join("Pegboard"))
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        platform_base_dir().map(|p| p.join("pegboard"))
     }
 }
 
