@@ -68,10 +68,16 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       # macOS：package.sh 产出 dist/Pegboard.app（LSUIElement 托盘形态）与
-      # dist/Pegboard.app.zip；在线升级的 macOS 资产 = 整包 .app.zip
+      # dist/Pegboard.app.zip；在线升级的 macOS 资产 = 整包 .app.zip。
+      # 资产名必须带 tag 与架构段（manifest job 的 python 按此约定定位）
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: ./scripts/package.sh
+
+      - name: Rename macOS asset
+        if: runner.os == 'macOS'
+        shell: bash
+        run: cp dist/Pegboard.app.zip "pegboard-${TAG}-${{ matrix.asset_suffix }}.app.zip"
 
       - name: Upload release asset (macOS)
         if: runner.os == 'macOS'
@@ -80,7 +86,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.TAG }}
-          files: dist/Pegboard.app.zip
+          files: pegboard-${{ env.TAG }}-${{ matrix.asset_suffix }}.app.zip
           name: pegboard ${{ env.TAG }}
           draft: true
 
