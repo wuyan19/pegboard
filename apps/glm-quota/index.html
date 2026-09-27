@@ -45,8 +45,15 @@ const API = new URLSearchParams(location.search).get("api") || "https://open.big
 const CACHE_KEY = "quota-cache";
 const $ = (id) => document.getElementById(id);
 
+// 上游响应内容进入 DOM 前一律转义
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
 function fail(e) {
-  $("result").innerHTML = '<span class="err">错误 ' + (e.code || "") + ": " + (e.message || e) + "</span>";
+  $("result").innerHTML = '<span class="err">错误 ' + esc(e.code || "") + ": " + esc(e.message || e) + "</span>";
 }
 
 async function loadKey() {
@@ -69,8 +76,8 @@ function render(data) {
   };
   walk(data, "");
   $("result").innerHTML = rows.length
-    ? '<table>' + rows.map(([k, v]) => "<tr><th>" + k + "</th><td>" + v + "</td></tr>").join("") + "</table>"
-    : '<pre class="ok">' + JSON.stringify(data, null, 2) + "</pre>";
+    ? '<table>' + rows.map(([k, v]) => "<tr><th>" + esc(k) + "</th><td>" + esc(v) + "</td></tr>").join("") + "</table>"
+    : '<pre class="ok">' + esc(JSON.stringify(data, null, 2)) + "</pre>";
 }
 
 $("save-key").addEventListener("click", async () => {
