@@ -15,7 +15,8 @@ clap = { workspace = true, features = ["derive", "env"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal"] }
 axum = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+# ansi：with_ansi 在特性关闭时运行期 panic（fmt_layer.rs 断言），必须显式开启
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "ansi"] }
 tracing-appender = { workspace = true }
 thiserror = { workspace = true }
 # 托盘：tao 事件循环主线程 + tray-icon；图标为原生 RGBA 资产（免 image 解码依赖）
