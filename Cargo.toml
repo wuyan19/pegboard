@@ -65,7 +65,8 @@ clap = { version = "4.6.1", default-features = false, features = ["std", "help",
 
 # ---- 日志 ----
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", default-features = false }
+# registry：无终端模式下 stdout 层 + 文件层双挂
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry"] }
 
 # ---- 异步流 ----
 futures-core = "0.3.32"
@@ -74,5 +75,29 @@ futures-util = { version = "0.3.32", default-features = false }
 # ---- 测试 ----
 tempfile = "3.20.0"
 
-# ---- 压缩包（应用包安装） ----
+# ---- 压缩包（应用包安装 + macOS 升级整包解压） ----
 zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
+
+# ---- 系统托盘（进程编排，仅 cli）----
+# Tauri 生态标准组合：tao 事件循环必须跑主线程（macOS NSApplication 约束），
+# tokio 服务跑子线程；Linux 由 crate 默认特性带 gtk。
+tray-icon = "0.24"
+tao = "0.35"
+
+# ---- 无终端模式的文件日志（仅 cli）----
+tracing-appender = "0.2"
+
+# ---- 在线升级（放 server：管理 API 需触达）----
+semver = "1.0"
+self-replace = "1.2"
+# verify-only 验签（Ed25519，Tauri updater 同款）；完整实现 minisign 仅 dev/test
+minisign-verify = "0.2"
+minisign = "0.9"
+
+# ---- Windows 控制台重接（无终端双击启动；[target] 段由 cli crate 自带，
+#      虚拟 workspace 清单不允许顶层 target 段）----
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+] }

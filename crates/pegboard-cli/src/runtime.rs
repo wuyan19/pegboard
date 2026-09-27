@@ -1,18 +1,24 @@
 //! 装配与启动：按依赖顺序构造组件，绑定监听，服务直至关闭信号。
 //! 装配顺序（cli 骨架）：日志 → 配置 → 数据目录 → 注册表 → 审计 → 状态 → 路由 → 监听。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use pegboard_core::app::AppRegistry;
 use pegboard_core::audit::{AuditConfig, Auditor};
 use pegboard_core::config::Config;
+use pegboard_server::host::ProcessControl;
 use pegboard_server::ingress::{build_router, AppState};
+use tokio::sync::Notify;
 
 use crate::shutdown;
 
 /// 优雅关闭排空上限。
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+/// 重启子进程的端口绑定重试：25 × 100ms ≈ 2.5s，覆盖旧进程释放监听的窗口。
+const RESTART_BIND_RETRIES: u32 = 25;
+const RESTART_BIND_WAIT: Duration = Duration::from_millis(100);
 
 /// 已完成装配、可启动的运行时。
 pub struct Runtime {
@@ -23,7 +29,10 @@ pub struct Runtime {
 }
 
 /// 按依赖顺序构造所有组件。任一步失败即退出，错误信息含具体组件。
-pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>> {
+pub async fn build(
+    config: Config,
+    control: Arc<dyn ProcessControl>,
+) -> Result<Runtime, Box<dyn std::error::Error>> {
     // 数据目录：data_root 下 logs / tmp / apps_data
     let data_root = config.storage.data_root.clone();
     for sub in ["logs", "tmp", "apps_data"] {
@@ -126,12 +135,11 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
         config: config.clone(),
         apps: RwLock::new(registry),
         auditor: audit_handle.clone(),
+        control,
     });
     let router = build_router(Arc::clone(&state));
 
-    let listener = tokio::net::TcpListener::bind(config.server.listen)
-        .await
-        .map_err(|e| format!("绑定 {} 失败: {e}", config.server.listen))?;
+    let listener = bind_listener(config.server.listen).await?;
 
     Ok(Runtime {
         listener,
@@ -141,8 +149,48 @@ pub async fn build(config: Config) -> Result<Runtime, Box<dyn std::error::Error>
     })
 }
 
-/// 启动 HTTP 服务，直到收到关闭信号；随后排空审计队列。
-pub async fn serve(rt: Runtime) -> Result<(), Box<dyn std::error::Error>> {
+/// 绑定监听。重启子进程（process::RESTART_CHILD_ENV=1）带重试窗口：
+/// 旧进程优雅退出需先释放监听，端口被占时按固定间隔重试。
+async fn bind_listener(
+    addr: std::net::SocketAddr,
+) -> Result<tokio::net::TcpListener, Box<dyn std::error::Error>> {
+    if std::env::var_os(crate::process::RESTART_CHILD_ENV).is_none() {
+        return tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| format!("绑定 {addr} 失败: {e}").into());
+    }
+    let mut last_err = None;
+    for attempt in 0..=RESTART_BIND_RETRIES {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => {
+                if attempt > 0 {
+                    tracing::info!(attempt, "重启子进程经重试后绑定成功");
+                }
+                return Ok(l);
+            }
+            Err(e) if attempt < RESTART_BIND_RETRIES => {
+                last_err = Some(e);
+                tokio::time::sleep(RESTART_BIND_WAIT).await;
+            }
+            Err(e) => {
+                return Err(format!("绑定 {addr} 失败（重试 {RESTART_BIND_RETRIES} 次后）: {e}").into())
+            }
+        }
+    }
+    Err(format!(
+        "绑定 {addr} 失败: {}",
+        last_err.map(|e| e.to_string()).unwrap_or_default()
+    )
+    .into())
+}
+
+/// 启动 HTTP 服务，直至关闭信号或宿主控制通知；随后排空审计队列并置位
+/// `stopped`（托盘/无头控制据此结束进程）。
+pub async fn serve(
+    rt: Runtime,
+    extra_shutdown: Option<Arc<Notify>>,
+    stopped: Option<Arc<AtomicBool>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let Runtime {
         listener,
         router,
@@ -166,6 +214,14 @@ pub async fn serve(rt: Runtime) -> Result<(), Box<dyn std::error::Error>> {
         let _ = done_tx.send(result);
     });
 
+    // 宿主控制关闭路径（托盘退出 / 重启请求）；无控制方时空等
+    let host_control = async {
+        match extra_shutdown {
+            Some(notify) => notify.notified().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+
     tokio::select! {
         done = &mut done_rx => {
             match done {
@@ -176,16 +232,11 @@ pub async fn serve(rt: Runtime) -> Result<(), Box<dyn std::error::Error>> {
         }
         signal = shutdown::signal() => {
             tracing::info!(signal = %signal, "shutting down");
-            let _ = drain_tx.send(());
-            match tokio::time::timeout(DRAIN_TIMEOUT, &mut done_rx).await {
-                Ok(Ok(Ok(()))) => {}
-                Ok(Ok(Err(e))) => return Err(format!("server error: {e}").into()),
-                Ok(Err(e)) => return Err(format!("server task 失败: {e}").into()),
-                Err(_) => {
-                    tracing::warn!("graceful shutdown 超时，强制退出");
-                    server_task.abort();
-                }
-            }
+            drain_server(drain_tx, &mut done_rx, &server_task).await?;
+        }
+        _ = host_control => {
+            tracing::info!("host control requested shutdown");
+            drain_server(drain_tx, &mut done_rx, &server_task).await?;
         }
     }
 
@@ -198,6 +249,30 @@ pub async fn serve(rt: Runtime) -> Result<(), Box<dyn std::error::Error>> {
     if dropped > 0 {
         tracing::warn!(dropped, "audit events were dropped under pressure");
     }
+
+    // 收尾完成：托盘/无头控制据此结束进程
+    if let Some(flag) = &stopped {
+        flag.store(true, Ordering::Release);
+    }
     tracing::info!("pegboard stopped");
     Ok(())
+}
+
+/// 通知服务排空并等待完成；超时强制中止。
+async fn drain_server(
+    drain_tx: tokio::sync::oneshot::Sender<()>,
+    done_rx: &mut tokio::sync::oneshot::Receiver<Result<(), std::io::Error>>,
+    server_task: &tokio::task::JoinHandle<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = drain_tx.send(());
+    match tokio::time::timeout(DRAIN_TIMEOUT, done_rx).await {
+        Ok(Ok(Ok(()))) => Ok(()),
+        Ok(Ok(Err(e))) => Err(format!("server error: {e}").into()),
+        Ok(Err(e)) => Err(format!("server task 失败: {e}").into()),
+        Err(_) => {
+            tracing::warn!("graceful shutdown 超时，强制退出");
+            server_task.abort();
+            Ok(())
+        }
+    }
 }

@@ -16,7 +16,11 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sig
 axum = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+tracing-appender = { workspace = true }
 thiserror = { workspace = true }
+# 托盘：tao 事件循环主线程 + tray-icon；图标为原生 RGBA 资产（免 image 解码依赖）
+tao = { workspace = true }
+tray-icon = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -25,3 +29,8 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process"] 
 futures-util = { workspace = true }
 url = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+# examples/update_keygen.rs / update_sign.rs 升级签名工具（开发机专用）
+minisign = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

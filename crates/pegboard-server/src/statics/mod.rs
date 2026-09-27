@@ -508,7 +508,8 @@ mod tests {
             config,
             apps: std::sync::RwLock::new(outcome.registry),
             auditor,
-        });
+                control: Arc::new(crate::host::NoControl),
+    });
         TestEnv { _root: root, state }
     }
 

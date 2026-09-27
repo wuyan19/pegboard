@@ -68,7 +68,8 @@ clap = { version = "4.6.1", default-features = false, features = ["std", "help",
 
 # ---- 日志 ----
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", default-features = false }
+# registry：无终端模式下 stdout 层 + 文件层双挂
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry"] }
 
 # ---- 异步流 ----
 futures-core = "0.3.32"

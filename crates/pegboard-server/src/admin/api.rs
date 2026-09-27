@@ -34,6 +34,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/admin/apps/{id}/enable", post(enable_app))
         .route("/api/admin/apps/{id}/disable", post(disable_app))
         .route("/api/admin/logs", get(list_logs))
+        .route("/api/admin/host/restart", post(host_restart))
 }
 
 /// multipart 错误映射：长度类 → 413，其余 → 400。
@@ -552,6 +553,27 @@ async fn delete_app(
 }
 
 /// Admin 操作审计事件（target = 应用 id）。
+/// 重启宿主进程（在线升级落位后 / 配置生效）。spawn 由进程层实现，
+/// 成功响应后本进程将优雅退出；失败（如 spawn 被拒）保持存活并返回 500。
+async fn host_restart(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
+    audit_admin(&state, "host", Outcome::Ok, None);
+    match state.control.request_restart() {
+        Ok(()) => {
+            tracing::info!("host restart requested");
+            Ok((StatusCode::OK, Json(json!({"ok": true}))).into_response())
+        }
+        Err(e) => {
+            audit_admin(&state, "host", Outcome::Error, Some("RESTART_FAILED"));
+            tracing::error!(error = %e, "host restart failed");
+            Err(ApiError::new(
+                code::UPSTREAM_ERROR,
+                500,
+                format!("重启失败: {e}"),
+            ))
+        }
+    }
+}
+
 fn audit_admin(state: &Arc<AppState>, app_id: &str, outcome: Outcome, error_code: Option<&str>) {
     let event = pegboard_core::audit::AuditEvent {
         ts: std::time::SystemTime::now()

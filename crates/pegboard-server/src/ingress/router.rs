@@ -41,6 +41,8 @@ pub struct AppState {
     pub admin_token: Option<String>,
     /// 禁用应用集合（能力 API 对禁用应用返回 APP_NOT_FOUND；静态仍可访问）
     pub disabled: RwLock<HashSet<String>>,
+    /// 进程控制（重启宿主）；实现属进程层（cli），单测用 NoControl
+    pub control: Arc<dyn crate::host::ProcessControl>,
 }
 
 impl AppState {

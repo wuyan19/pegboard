@@ -63,6 +63,7 @@ fn test_env_with(manifests: &[(&str, &str)]) -> TestEnv {
         config,
         apps: std::sync::RwLock::new(outcome.registry),
         auditor,
+        control: Arc::new(pegboard_server::host::NoControl),
     });
     TestEnv { _root: root, state }
 }

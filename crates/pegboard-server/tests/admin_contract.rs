@@ -17,8 +17,21 @@ fn state_with(manifests: &[(&str, &str)]) -> TestEnv {
 }
 
 fn state_with_opts(manifests: &[(&str, &str)], admin_token: Option<&str>) -> TestEnv {
+    state_full(
+        manifests,
+        admin_token,
+        Arc::new(pegboard_server::host::NoControl),
+    )
+}
+
+fn state_full(
+    manifests: &[(&str, &str)],
+    admin_token: Option<&str>,
+    control: Arc<dyn pegboard_server::host::ProcessControl>,
+) -> TestEnv {
     let root = tempfile::TempDir::new().expect("tempdir");
     let apps = root.path().join("apps");
+    std::fs::create_dir_all(&apps).expect("mkdir apps");
     for (id, manifest) in manifests {
         let dir = apps.join(id);
         std::fs::create_dir_all(&dir).expect("mkdir");
@@ -101,6 +114,7 @@ fn state_with_opts(manifests: &[(&str, &str)], admin_token: Option<&str>) -> Tes
         config,
         apps: std::sync::RwLock::new(outcome.registry),
         auditor: handle,
+        control,
     });
     TestEnv { _root: root, state }
 }
@@ -135,6 +149,47 @@ async fn body_json(response: axum::http::Response<Body>) -> serde_json::Value {
         .await
         .expect("body");
     serde_json::from_slice(&bytes).expect("json")
+}
+
+/// 记录重启调用的控制实现（共享标志供断言）。
+struct RecordingControl {
+    called: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl pegboard_server::host::ProcessControl for RecordingControl {
+    fn request_restart(&self) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        self.called.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn host_restart_invokes_process_control() {
+    let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let env = state_full(&[], None, Arc::new(RecordingControl { called: Arc::clone(&called) }));
+    let r = call(&env, Method::POST, "/api/admin/host/restart").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let v = body_json(r).await;
+    assert_eq!(v["ok"], true);
+    assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    // 重启动作应留下 Admin 审计事件
+    let r = call(&env, Method::GET, "/api/admin/logs?action=Admin").await;
+    let v = body_json(r).await;
+    let items = v["items"].as_array().expect("items");
+    assert!(
+        items.iter().any(|e| e["target"] == "host"),
+        "restart 应产生 Admin 审计事件: {items:?}"
+    );
+}
+
+#[tokio::test]
+async fn host_restart_unsupported_maps_to_error() {
+    let env = env();
+    let r = call(&env, Method::POST, "/api/admin/host/restart").await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let v = body_json(r).await;
+    assert_eq!(v["error"]["code"], "UPSTREAM_ERROR");
 }
 
 #[tokio::test]

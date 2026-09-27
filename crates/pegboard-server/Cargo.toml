@@ -24,9 +24,16 @@ url = { workspace = true }
 futures-util = { workspace = true }
 tracing = { workspace = true }
 zip = { workspace = true }
+# 在线升级（host 模块）：reqwest 复用代理同款 rustls 客户端栈
+reqwest = { workspace = true, features = ["rustls", "stream"] }
+semver = { workspace = true }
+self-replace = { workspace = true }
+minisign-verify = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 zip = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process"] }
+# 单测内生成/签发测试密钥对（运行时只依赖 minisign-verify）
+minisign = { workspace = true }

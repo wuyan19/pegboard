@@ -3,5 +3,6 @@
 //! 依赖 pegboard-core；协议转换只在 ingress。
 
 pub mod admin;
+pub mod host;
 pub mod ingress;
 pub mod statics;
