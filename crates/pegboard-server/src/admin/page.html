@@ -3,111 +3,236 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pegboard 管理页</title>
+<title>Pegboard 管理台</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="4" fill="%232563eb"/><circle cx="8" cy="8" r="3.4" fill="none" stroke="white" stroke-width="1.7"/><circle cx="8" cy="8" r="1.2" fill="white"/></svg>'>
 <style>
-  :root { color-scheme: light dark; }
-  body { font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f7f7f8; color: #1c1c1e; }
-  @media (prefers-color-scheme: dark) { body { background: #161618; color: #e8e8ea; } }
-  h1 { font-size: 20px; margin: 0 0 2px; }
-  h2 { font-size: 15px; margin: 24px 0 8px; display: flex; align-items: baseline; gap: 12px; }
-  .sub { color: #888; margin-bottom: 16px; font-size: 12px; }
-  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
-  table { border-collapse: collapse; width: 100%; background: var(--card, #fff); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
-  @media (prefers-color-scheme: dark) { table { background: #1e1e21; } }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(128,128,128,.2); font-size: 13px; vertical-align: top; }
-  th { font-weight: 600; color: #666; font-size: 12px; }
-  tbody tr.clickable { cursor: pointer; }
-  tbody tr.clickable:hover { background: rgba(10,132,255,.06); }
-  code, .mono { font-family: ui-monospace, monospace; font-size: 12px; }
-  a { color: #0a84ff; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; }
-  .ok { background: #d4f4dd; color: #14532d; }
-  .off { background: #f3d6d6; color: #7f1d1d; }
-  .warn { background: #fdeccc; color: #7c4a03; }
-  .err { background: #f3d6d6; color: #7f1d1d; }
-  .dim { background: rgba(128,128,128,.18); color: inherit; }
-  @media (prefers-color-scheme: dark) {
-    .ok { background: #14351f; color: #7ee2a8; }
-    .off, .err { background: #3d1a1a; color: #f0a3a3; }
-    .warn { background: #3d2a10; color: #f5c67a; }
-    .dim { background: rgba(128,128,128,.25); }
+  /* 设计基调：极简 / 瑞士网格（开发者运维台）。深色为一等主题，浅色同套 token。 */
+  :root {
+    color-scheme: light dark;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --bg: #f1f5f9;
+    --card: #ffffff;
+    --fg: #0f172a;
+    --muted: #475569;
+    --faint: #64748b;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --hover: #f1f5f9;
+    --accent: #2563eb;
+    --ring: #2563eb;
+    --err: #dc2626;
+    --ok-bg: #dcfce7;   --ok-fg: #166534;
+    --warn-bg: #fef3c7; --warn-fg: #92400e;
+    --err-bg: #fee2e2;  --err-fg: #991b1b;
+    --dim-bg: #e2e8f0;  --dim-fg: #334155;
+    --track: #e2e8f0;
+    --shadow: 0 1px 2px rgba(15, 23, 42, .05);
+    --shadow-lg: 0 16px 48px rgba(15, 23, 42, .22);
   }
-  button, select, input { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a;
+      --card: #1b2336;
+      --fg: #f8fafc;
+      --muted: #94a3b8;
+      --faint: #7e8ca3;
+      --border: #2a3550;
+      --border-strong: #475569;
+      --hover: #242e47;
+      --accent: #60a5fa;
+      --ring: #93c5fd;
+      --err: #f87171;
+      --ok-bg: rgba(74, 222, 128, .13);   --ok-fg: #4ade80;
+      --warn-bg: rgba(251, 191, 36, .13); --warn-fg: #fbbf24;
+      --err-bg: rgba(248, 113, 113, .15); --err-fg: #f87171;
+      --dim-bg: rgba(148, 163, 184, .16); --dim-fg: #cbd5e1;
+      --track: rgba(148, 163, 184, .22);
+      --shadow: none;
+      --shadow-lg: 0 16px 48px rgba(0, 0, 0, .5);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 14px/1.55 var(--sans);
+    margin: 0 auto;
+    max-width: 1160px;
+    padding: 20px 24px 56px;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  ::placeholder { color: var(--faint); }
+
+  /* 页头 */
+  .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+  h1 { font-size: 18px; font-weight: 650; letter-spacing: -.01em; margin: 0; }
+  .sub { color: var(--faint); font-size: 12px; margin-top: 3px; }
+  .head-meta { display: flex; align-items: center; gap: 10px; padding-top: 3px; }
+  #status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  h2 { font-size: 15px; font-weight: 600; margin: 26px 0 4px; display: flex; align-items: baseline; gap: 8px; }
+  .count { font-size: 12px; font-weight: 400; color: var(--faint); }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  .hint { color: var(--faint); font-size: 12px; margin: 8px 2px 0; }
+  .muted { color: var(--muted); }
+
+  /* 控件 */
+  button, select, input {
+    font: inherit; font-size: 13px; line-height: 1.2; padding: 6px 12px;
+    border-radius: 8px; border: 1px solid var(--border-strong);
+    background: var(--card); color: var(--fg);
+    transition: background-color .15s ease, border-color .15s ease;
+  }
   button { cursor: pointer; }
-  button:hover:not(:disabled) { background: rgba(128,128,128,.12); }
-  button:disabled { opacity: .4; cursor: default; }
-  button.danger { color: #d33; border-color: rgba(221,51,51,.5); }
-  .muted { color: #888; }
-  #status { font-size: 12px; color: #888; }
-  .usage-bar { height: 6px; background: rgba(128,128,128,.2); border-radius: 3px; width: 140px; display: inline-block; vertical-align: middle; margin-right: 6px; }
-  .usage-fill { height: 100%; border-radius: 3px; background: #0a84ff; }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.danger { color: var(--err); border-color: currentColor; }
+  button.danger:hover:not(:disabled) { background: var(--err-bg); }
+  @media (pointer: coarse) { button, select, input { min-height: 44px; } }
+
+  /* 表格 */
+  .table-wrap {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: var(--shadow); overflow-x: auto;
+  }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: top; }
+  thead th { font-weight: 600; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr { transition: background-color .12s ease; }
+  tbody tr.clickable { cursor: pointer; }
+  @media (hover: hover) { tbody tr.clickable:hover { background: var(--hover); } }
+  tbody tr.clickable:focus-visible { outline-offset: -2px; }
+  td[colspan] { padding: 18px 14px; color: var(--faint); }
+  #logs { min-width: 820px; }
+  /* 状态与操作列不换行，操作按钮保持一行 */
+  #apps td:nth-child(2), #apps td:last-child { white-space: nowrap; }
+  td { font-variant-numeric: tabular-nums; }
+  code, .mono { font-family: var(--mono); font-size: 12px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* 状态徽章 */
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
+  .ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .warn { background: var(--warn-bg); color: var(--warn-fg); }
+  .err { background: var(--err-bg); color: var(--err-fg); }
+  .dim { background: var(--dim-bg); color: var(--dim-fg); }
+
+  /* 用量条（数值在文本中，色条仅辅助） */
+  .usage-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+  .usage-label { flex: none; width: 40px; color: var(--muted); }
+  .usage-bar { flex: none; height: 8px; width: 150px; background: var(--track); border-radius: 4px; overflow: hidden; }
+  .usage-fill { display: block; height: 100%; background: var(--accent); }
+  .usage-num { font-size: 12px; color: var(--muted); }
+
   /* 模态框 */
   #modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; }
   #modal[hidden] { display: none; }
-  #modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.45); }
-  #modal-card { position: relative; width: 640px; max-width: 100%; max-height: 80vh; overflow-y: auto; background: var(--card, #fff); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.25); }
-  @media (prefers-color-scheme: dark) { #modal-card { background: #1e1e21; } }
-  #modal-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid rgba(128,128,128,.2); position: sticky; top: 0; background: inherit; border-radius: 12px 12px 0 0; }
-  #modal-body { padding: 14px 18px 18px; }
-  #modal-body h3 { font-size: 13px; margin: 14px 0 6px; color: #666; }
+  #modal-backdrop { position: absolute; inset: 0; background: rgba(2, 6, 23, .55); }
+  #modal-card {
+    position: relative; width: 660px; max-width: 100%; max-height: 82vh; overflow-y: auto;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg);
+  }
+  #modal-head {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; background: var(--card); border-radius: 12px 12px 0 0;
+  }
+  #modal-close { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; }
+  #modal-body { padding: 16px 20px 20px; }
+  #modal-body h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
   #modal-body h3:first-child { margin-top: 0; }
-  .kv-table { width: 100%; }
-  .kv-table td { padding: 4px 8px 4px 0; border: none; font-size: 13px; }
-  .kv-table td:first-child { color: #888; width: 96px; }
+  .fact-box {
+    font-family: var(--mono); font-size: 12px; line-height: 1.9;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  }
+  .kv-table { width: 100%; border-collapse: collapse; }
+  .kv-table td { padding: 5px 8px 5px 0; border: none; font-size: 13px; vertical-align: top; }
+  .kv-table td:first-child { color: var(--muted); width: 96px; white-space: nowrap; }
+  .kv-table td:last-child { overflow-wrap: anywhere; }
+
+  @keyframes fade-in { from { opacity: 0; } }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+  @media (prefers-reduced-motion: no-preference) {
+    #modal:not([hidden]) #modal-backdrop { animation: fade-in .15s ease-out; }
+    #modal:not([hidden]) #modal-card { animation: pop-in .18s cubic-bezier(.2, .9, .3, 1); }
+  }
+
+  @media (max-width: 720px) {
+    body { padding: 16px 12px 40px; }
+    th, td { padding: 8px 10px; }
+    #modal { padding: 16px 8px; }
+    #modal-body { padding: 12px 14px 16px; }
+  }
 </style>
 </head>
 <body>
-<h1>Pegboard <span class="muted" id="server-info"></span></h1>
-<div class="sub">宿主管理 · 应用 / 权限 / 限额 / 审计日志（只读元数据，无业务数据）· <span id="status">加载中…</span></div>
+<header class="page-head">
+  <div>
+    <h1>Pegboard 管理台</h1>
+    <div class="sub">宿主管理 · 应用 / 权限 / 限额 / 审计日志（只读元数据，无业务数据）· <span id="server-info"></span></div>
+  </div>
+  <div class="head-meta">
+    <span id="status">加载中…</span>
+    <button id="refresh" title="立即刷新（每 10 秒自动刷新）">刷新</button>
+  </div>
+</header>
 
-<h2>应用 <button id="refresh" title="立即刷新（每 10 秒自动刷新）">刷新</button></h2>
+<h2>应用 <span class="count" id="app-count"></span></h2>
 <div class="bar">
-  <input id="install-id" placeholder="应用 id（apps/ 目录名）" size="26">
+  <input id="install-id" placeholder="应用 id（apps/ 目录名）" size="26" aria-label="应用 id（apps/ 目录名）" autocapitalize="none" spellcheck="false">
   <button id="install">安装</button>
   <span class="muted">或</span>
   <input type="file" id="package" accept=".zip" hidden>
   <button id="upload-package" title="上传 zip 应用包（包根含 manifest.json）">上传安装包</button>
-  <span class="muted" id="install-msg">按清单校验后注册；失败会显示原因</span>
+  <span class="muted" id="install-msg" aria-live="polite">按清单校验后注册；失败会显示原因</span>
 </div>
-<table id="apps">
-  <thead><tr><th>应用</th><th>状态</th><th>操作</th></tr></thead>
-  <tbody id="apps-body"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody>
-</table>
-<div class="sub">点击行查看详情 · 禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问 · 卸载保留产物与数据（重装即恢复），删除不可逆。</div>
+<div class="table-wrap">
+  <table id="apps">
+    <thead><tr><th>应用</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody id="apps-body"><tr><td colspan="3">加载中…</td></tr></tbody>
+  </table>
+</div>
+<p class="hint">点击行查看详情（支持 Enter 键）· 禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问 · 卸载保留产物与数据（重装即恢复），删除不可逆。</p>
 
 <h2>审计日志</h2>
-<div class="sub">能力调用事件（静态访问不入审计）。</div>
+<p class="hint" style="margin-top: 0;">能力调用事件（静态访问不入审计）。</p>
 <div class="bar">
-  <select id="f-app" title="按应用过滤"><option value="">全部应用</option></select>
-  <select id="f-action" title="按动作过滤">
+  <select id="f-app" title="按应用过滤" aria-label="按应用过滤"><option value="">全部应用</option></select>
+  <select id="f-action" title="按动作过滤" aria-label="按动作过滤">
     <option value="">全部动作</option>
     <option>Store</option><option>Files</option><option>Net</option>
     <option>Ws</option><option>Admin</option><option>Identity</option>
   </select>
-  <select id="f-outcome" title="按结果过滤">
+  <select id="f-outcome" title="按结果过滤" aria-label="按结果过滤">
     <option value="">全部结果</option>
     <option>Ok</option><option>Denied</option><option>Error</option>
   </select>
-  <select id="f-limit" title="每页条数">
+  <select id="f-limit" title="每页条数" aria-label="每页条数">
     <option>20</option><option selected>50</option><option>100</option><option>200</option>
   </select>
   <span class="muted" id="log-page"></span>
   <button id="logs-prev" title="更新的事件" disabled>← 较新</button>
   <button id="logs-next" title="更早的事件" disabled>较旧 →</button>
 </div>
-<table id="logs">
-  <thead><tr><th>时间</th><th>应用</th><th>subject</th><th>动作</th><th>目标</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead>
-  <tbody id="logs-body"><tr><td colspan="8" class="muted">加载中…</td></tr></tbody>
-</table>
+<div class="table-wrap">
+  <table id="logs">
+    <thead><tr><th>时间</th><th>应用</th><th>subject</th><th>动作</th><th>目标</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead>
+    <tbody id="logs-body"><tr><td colspan="8">加载中…</td></tr></tbody>
+  </table>
+</div>
 
 <!-- 应用详情模态框 -->
 <div id="modal" hidden>
   <div id="modal-backdrop"></div>
-  <div id="modal-card">
+  <div id="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div id="modal-head">
       <strong id="modal-title"></strong>
-      <button id="modal-close" title="关闭 (Esc)">✕</button>
+      <button id="modal-close" title="关闭 (Esc)" aria-label="关闭">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
     </div>
     <div id="modal-body"></div>
   </div>
@@ -198,30 +323,33 @@ const STATE_LABEL = {
   enabled: "启用", disabled: "禁用",
   not_installed: "未安装", invalid: "无效", missing: "缺失",
 };
+const STATE_CLASS = {
+  enabled: "ok", disabled: "dim",
+  not_installed: "dim", invalid: "err", missing: "warn",
+};
 
 async function loadApps() {
   if (appsInFlight) return;
   appsInFlight = true;
+  $("apps").setAttribute("aria-busy", "true");
   try {
     appsCache = await j("/api/admin/apps");
     const tbody = $("apps-body");
     tbody.innerHTML = "";
     if (!appsCache.length) {
       setBody("#apps-body",
-        '<tr><td colspan="3" class="muted">没有已注册应用；把应用放进 apps/ 目录后，在上方输入 id 安装</td></tr>');
+        '<tr><td colspan="3">没有已注册应用；把应用放进 apps/ 目录后，在上方输入 id 安装</td></tr>');
     }
     for (const a of appsCache) {
       const tr = document.createElement("tr");
       tr.className = "clickable";
+      tr.tabIndex = 0;
       tr.dataset.id = a.id;
       const label = STATE_LABEL[a.state] || a.state;
-      const pillClass =
-        a.state === "enabled" ? "ok" :
-        a.state === "disabled" ? "off" :
-        a.state === "invalid" ? "err" : "dim";
+      const pillClass = STATE_CLASS[a.state] || "dim";
       const registered = a.state === "enabled" || a.state === "disabled";
       const nameCell = registered
-        ? '<a href="/apps/' + esc(a.id) + '/" target="_blank" title="打开应用">' + esc(a.name) + '</a>' +
+        ? '<a href="/apps/' + esc(a.id) + '/" target="_blank" rel="noopener noreferrer" title="打开应用">' + esc(a.name) + '</a>' +
           ' <code class="muted">' + esc(a.id) + '</code>' +
           '<div class="mono muted">' + esc(a.entry) + '</div>'
         : '<span>' + esc(a.name) + '</span>' +
@@ -248,6 +376,7 @@ async function loadApps() {
         "<td>" + acts.join(" ") + "</td>";
       tbody.appendChild(tr);
     }
+    $("app-count").textContent = appsCache.length ? "共 " + appsCache.length + " 个" : "";
     tbody.querySelectorAll("button[data-act]").forEach((b) => {
       b.addEventListener("click", async (ev) => {
         ev.stopPropagation();
@@ -281,6 +410,7 @@ async function loadApps() {
     $("apps-body").appendChild(errorRow(3, e, loadApps));
     $("status").textContent = "刷新失败";
   } finally {
+    $("apps").removeAttribute("aria-busy");
     appsInFlight = false;
   }
 }
@@ -327,18 +457,22 @@ function usageLine(label, used, max, count, unit) {
   const pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
   const over = used > max;
   return (
-    "<div>" + label +
-    ' <span class="usage-bar"><span class="usage-fill" style="width:' + pct + '%;' +
-      (over ? "background:#d33" : "") + '"></span></span>' +
-    '<span class="mono">' + fmtBytes(used) + " / " + fmtBytes(max) + "（" + pct + "%）" +
+    '<div class="usage-row"><span class="usage-label">' + label + "</span>" +
+    '<span class="usage-bar" aria-hidden="true"><span class="usage-fill" style="width:' + pct + "%;" +
+      (over ? "background:var(--err)" : "") + '"></span></span>' +
+    '<span class="usage-num mono">' + fmtBytes(used) + " / " + fmtBytes(max) + "（" + pct + "%）" +
     " · " + count + " " + unit + "</span></div>"
   );
 }
 
+let lastFocused = null;
+
 async function openModal(id) {
+  lastFocused = document.activeElement;
   $("modal-title").textContent = id;
   $("modal-body").innerHTML = '<div class="muted">读取详情中…</div>';
   $("modal").hidden = false;
+  $("modal-close").focus();
   try {
     const d = await j("/api/admin/apps/" + encodeURIComponent(id));
     const label = STATE_LABEL[d.state] || d.state || "—";
@@ -353,20 +487,20 @@ async function openModal(id) {
     $("modal-title").textContent = d.name + "（" + d.id + "）";
     $("modal-body").innerHTML =
       '<table class="kv-table">' +
-      '<tr><td>状态</td><td><span class="pill ' + (d.state === "enabled" ? "ok" : "off") + '">' + esc(label) + "</span></td></tr>" +
+      '<tr><td>状态</td><td><span class="pill ' + (STATE_CLASS[d.state] || "dim") + '">' + esc(label) + "</span></td></tr>" +
       '<tr><td>入口</td><td class="mono">' + esc(d.entry) +
-        ' <a href="/apps/' + esc(d.id) + '/" target="_blank">打开 ↗</a></td></tr>' +
+        ' <a href="/apps/' + esc(d.id) + '/" target="_blank" rel="noopener noreferrer">打开 ↗</a></td></tr>' +
       '<tr><td>安装时间</td><td>' + (d.installed_at ? esc(new Date(d.installed_at).toLocaleString()) : "—") + "</td></tr>" +
       '<tr><td>产物目录</td><td class="mono">' + esc(d.root) + "</td></tr>" +
       '<tr><td>数据目录</td><td class="mono">' + esc(d.data_dir) + "</td></tr>" +
       "</table>" +
-      "<h3>权限</h3><div class=\"mono\">" + perms.map(esc).join("<br>") + "</div>" +
-      "<h3>限额（生效）</h3><div class=\"mono\">" +
+      "<h3>权限</h3>" + '<div class="fact-box">' + perms.map(esc).join("<br>") + "</div>" +
+      "<h3>限额（生效）</h3>" + '<div class="fact-box">' +
         esc("kv " + fmtBytes(d.limits.kv_value_bytes) + " / " + fmtBytes(d.limits.kv_total_bytes) +
           " · file " + fmtBytes(d.limits.file_bytes) + " / " + fmtBytes(d.limits.file_total_bytes) +
           " · " + d.limits.net_rps + " rps · sign_ttl " + d.limits.sign_ttl_max + "s") + "</div>" +
       "<h3>实际用量</h3>" +
-      usageLine("KV　", d.usage.kv.bytes, d.limits.kv_total_bytes, d.usage.kv.keys, "键") +
+      usageLine("KV", d.usage.kv.bytes, d.limits.kv_total_bytes, d.usage.kv.keys, "键") +
       usageLine("文件", d.usage.files.bytes, d.limits.file_total_bytes, d.usage.files.count, "个");
   } catch (e) {
     $("modal-body").innerHTML =
@@ -376,11 +510,29 @@ async function openModal(id) {
 
 function closeModal() {
   $("modal").hidden = true;
+  if (lastFocused && lastFocused.isConnected) lastFocused.focus();
+  lastFocused = null;
 }
 $("modal-close").addEventListener("click", closeModal);
 $("modal-backdrop").addEventListener("click", closeModal);
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && !$("modal").hidden) closeModal();
+});
+// 焦点圈定：Tab 在模态框内循环
+$("modal-card").addEventListener("keydown", (ev) => {
+  if (ev.key !== "Tab") return;
+  const focusables = $("modal-card")
+    .querySelectorAll('button:not(:disabled), a[href], input, select, [tabindex]:not([tabindex="-1"])');
+  if (!focusables.length) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (ev.shiftKey && document.activeElement === first) {
+    last.focus();
+    ev.preventDefault();
+  } else if (!ev.shiftKey && document.activeElement === last) {
+    first.focus();
+    ev.preventDefault();
+  }
 });
 
 // ---------- 审计日志（双向分页）----------
@@ -404,7 +556,7 @@ function renderLogs() {
   const tbody = $("logs-body");
   tbody.innerHTML = "";
   if (!logs.items.length) {
-    setBody("#logs-body", '<tr><td colspan="8" class="muted">暂无事件（过滤条件或时间范围内没有能力调用）</td></tr>');
+    setBody("#logs-body", '<tr><td colspan="8">暂无事件（过滤条件或时间范围内没有能力调用）</td></tr>');
   }
   for (const e of logs.items) {
     const tr = document.createElement("tr");
@@ -414,7 +566,7 @@ function renderLogs() {
       "<td>" + esc(e.subject || "-") + "</td>" +
       "<td>" + esc(e.action) + "</td>" +
       '<td class="mono">' + esc(e.target || "-") + "</td>" +
-      '<td><span class="pill ' + (OUTCOME_CLASS[e.outcome] || "") + '">' + esc(e.outcome) + "</span></td>" +
+      '<td><span class="pill ' + (OUTCOME_CLASS[e.outcome] || "dim") + '">' + esc(e.outcome) + "</span></td>" +
       '<td class="mono">' + esc(e.error_code || "-") + "</td>" +
       "<td>" + esc(e.duration_ms) + " ms</td>";
     tbody.appendChild(tr);
@@ -427,6 +579,7 @@ function renderLogs() {
 async function loadLogs() {
   if (logsInFlight) return;
   logsInFlight = true;
+  $("logs").setAttribute("aria-busy", "true");
   try {
     const page = await j("/api/admin/logs?" + logQuery());
     logs.items = page.items || [];
@@ -437,6 +590,7 @@ async function loadLogs() {
     setBody("#logs-body", "");
     $("logs-body").appendChild(errorRow(8, e, loadLogs));
   } finally {
+    $("logs").removeAttribute("aria-busy");
     logsInFlight = false;
   }
 }
@@ -495,11 +649,20 @@ setInterval(() => {
   }
 }, 10_000);
 
-// 行点击打开详情
+// 行点击 / 回车打开详情
 $("apps-body").addEventListener("click", (ev) => {
   if (ev.target.closest("button") || ev.target.closest("a")) return;
   const tr = ev.target.closest("tr[data-id]");
   if (tr) openModal(tr.dataset.id);
+});
+$("apps-body").addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  if (ev.target.closest("button") || ev.target.closest("a")) return;
+  const tr = ev.target.closest("tr[data-id]");
+  if (tr) {
+    ev.preventDefault();
+    openModal(tr.dataset.id);
+  }
 });
 
 refreshAll();
