@@ -6,7 +6,8 @@
 <title>Pegboard 管理台</title>
 <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="4" fill="%232563eb"/><circle cx="8" cy="8" r="3.4" fill="none" stroke="white" stroke-width="1.7"/><circle cx="8" cy="8" r="1.2" fill="white"/></svg>'>
 <style>
-  /* 设计基调：极简 / 瑞士网格（开发者运维台）。深色为一等主题，浅色同套 token。 */
+  /* 设计基调：极简 / 瑞士网格（开发者运维台）。深色为一等主题，浅色同套 token。
+     侧边栏 SPA，hash 路由（方案 §3）；唯一装饰元素是应用墙的洞洞板空状态（产品隐喻）。 */
   :root {
     color-scheme: light dark;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -28,7 +29,6 @@
     --dim-bg: #e2e8f0;  --dim-fg: #334155;
     --track: #e2e8f0;
     --shadow: 0 1px 2px rgba(15, 23, 42, .05);
-    --shadow-lg: 0 16px 48px rgba(15, 23, 42, .22);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -49,47 +49,116 @@
       --dim-bg: rgba(148, 163, 184, .16); --dim-fg: #cbd5e1;
       --track: rgba(148, 163, 184, .22);
       --shadow: none;
-      --shadow-lg: 0 16px 48px rgba(0, 0, 0, .5);
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
     font: 14px/1.55 var(--sans);
-    margin: 0 auto;
-    max-width: 1160px;
-    padding: 20px 24px 56px;
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 218px minmax(0, 1fr);
     background: var(--bg);
     color: var(--fg);
   }
   :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
   ::placeholder { color: var(--faint); }
 
-  /* 页头 */
-  .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
-  h1 { font-size: 18px; font-weight: 650; letter-spacing: -.01em; margin: 0; }
-  .sub { color: var(--faint); font-size: 12px; margin-top: 3px; }
-  .head-meta { display: flex; align-items: center; gap: 10px; padding-top: 3px; }
-  #status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* 侧边栏 */
+  .side {
+    position: sticky; top: 0; height: 100vh;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 18px 12px 14px;
+    background: var(--card); border-right: 1px solid var(--border);
+  }
+  .brand { display: flex; gap: 9px; align-items: center; padding: 2px 8px 12px; color: inherit; text-decoration: none; }
+  .brand-text strong { display: block; font-size: 14px; letter-spacing: -.01em; line-height: 1.3; }
+  .brand-text span { display: block; font-size: 11px; color: var(--faint); line-height: 1.4; }
+  .nav { display: flex; flex-direction: column; gap: 2px; }
+  .nav a {
+    display: block; padding: 7px 10px 7px 13px; border-radius: 7px;
+    color: var(--muted); font-size: 13.5px; text-decoration: none;
+  }
+  .nav a:hover { background: var(--hover); color: var(--fg); }
+  .nav a.active { background: var(--hover); color: var(--fg); font-weight: 550; box-shadow: inset 2.5px 0 0 var(--accent); }
+  .side-foot {
+    margin-top: auto; padding: 10px 8px 0; border-top: 1px solid var(--border);
+    font-size: 11px; line-height: 1.7; color: var(--faint); overflow-wrap: anywhere;
+  }
 
-  h2 { font-size: 15px; font-weight: 600; margin: 26px 0 4px; display: flex; align-items: baseline; gap: 8px; }
+  /* 主区 */
+  main { padding: 18px 26px 56px; width: 100%; max-width: 1180px; margin: 0 auto; min-width: 0; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+  h1 { font-size: 18px; font-weight: 650; letter-spacing: -.01em; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .head-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #status { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  h2 { font-size: 15px; font-weight: 600; margin: 24px 0 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  h3 { font-size: 13px; font-weight: 600; margin: 18px 0 8px; }
   .count { font-size: 12px; font-weight: 400; color: var(--faint); }
   .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
   .hint { color: var(--faint); font-size: 12px; margin: 8px 2px 0; }
   .muted { color: var(--muted); }
+  .small { font-size: 12px; }
 
   /* 控件 */
-  button, select, input {
+  button, select, input, a.btn {
     font: inherit; font-size: 13px; line-height: 1.2; padding: 6px 12px;
     border-radius: 8px; border: 1px solid var(--border-strong);
     background: var(--card); color: var(--fg);
+    text-decoration: none; display: inline-block;
     transition: background-color .15s ease, border-color .15s ease;
   }
   button { cursor: pointer; }
-  button:hover:not(:disabled) { background: var(--hover); }
+  button:hover:not(:disabled), a.btn:hover { background: var(--hover); }
   button:disabled { opacity: .45; cursor: default; }
   button.danger { color: var(--err); border-color: currentColor; }
   button.danger:hover:not(:disabled) { background: var(--err-bg); }
-  @media (pointer: coarse) { button, select, input { min-height: 44px; } }
+  button.copy { padding: 2px 8px; font-size: 11px; border-radius: 6px; }
+  @media (pointer: coarse) { button, select, input, a.btn { min-height: 44px; } button.copy { min-height: 0; } }
+
+  /* 应用墙卡片 */
+  .wall-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; margin-top: 6px; }
+  .app-card {
+    display: flex; flex-direction: column; gap: 9px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 13px 15px; box-shadow: var(--shadow); cursor: pointer;
+    transition: border-color .12s ease;
+  }
+  @media (hover: hover) { .app-card:hover { border-color: var(--border-strong); } }
+  .card-head { display: flex; gap: 10px; align-items: flex-start; }
+  .peg {
+    flex: none; width: 30px; height: 30px; display: grid; place-items: center;
+    border-radius: 8px; background: var(--hover); color: var(--muted);
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
+  }
+  .card-title { flex: 1; min-width: 0; }
+  .card-name { display: block; color: var(--fg); font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
+  .card-name:hover { color: var(--accent); }
+  .card-id { display: inline-block; font-size: 11.5px; color: var(--faint); text-decoration: none; }
+  .card-id:hover { color: var(--accent); text-decoration: underline; }
+  .card-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+  .perm { font-family: var(--mono); font-size: 11px; padding: 1.5px 7px; border-radius: 5px; background: var(--dim-bg); color: var(--dim-fg); }
+  .card-meta { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+  .err-text { color: var(--err); }
+  .card-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; padding-top: 4px; }
+  .card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .card-actions button { padding: 4px 9px; font-size: 12px; }
+
+  /* 空状态：洞洞板（有孔无钉 = 邀请安装） */
+  .empty { grid-column: 1 / -1; border: 1px dashed var(--border-strong); border-radius: 10px; padding: 34px 20px; text-align: center; color: var(--muted); background: var(--card); }
+  .empty p { margin: 0 0 10px; }
+  .dots {
+    width: 216px; max-width: 80%; height: 56px; margin: 0 auto 14px;
+    background-image: radial-gradient(var(--border-strong) 2.2px, transparent 2.6px);
+    background-size: 18px 18px; background-position: center;
+  }
+  .empty-ok { border: 1px solid var(--border); border-radius: 10px; padding: 18px; color: var(--muted); background: var(--card); text-align: center; }
+  .error-box {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px;
+    background: var(--card); color: var(--muted);
+  }
 
   /* 表格 */
   .table-wrap {
@@ -100,15 +169,12 @@
   th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: top; }
   thead th { font-weight: 600; color: var(--muted); font-size: 12px; white-space: nowrap; }
   tbody tr:last-child td { border-bottom: none; }
-  tbody tr { transition: background-color .12s ease; }
-  tbody tr.clickable { cursor: pointer; }
-  @media (hover: hover) { tbody tr.clickable:hover { background: var(--hover); } }
-  tbody tr.clickable:focus-visible { outline-offset: -2px; }
-  td[colspan] { padding: 18px 14px; color: var(--faint); }
-  #logs { min-width: 820px; }
-  /* 状态与操作列不换行，操作按钮保持一行 */
-  #apps td:nth-child(2), #apps td:last-child { white-space: nowrap; }
   td { font-variant-numeric: tabular-nums; }
+  td[colspan] { padding: 14px; color: var(--faint); }
+  #logs { min-width: 860px; }
+  #act-logs { min-width: 680px; }
+  #den-logs { min-width: 560px; }
+  tr.hint-row td { padding-top: 0; font-size: 12px; color: var(--muted); }
   code, .mono { font-family: var(--mono); font-size: 12px; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -120,6 +186,22 @@
   .err { background: var(--err-bg); color: var(--err-fg); }
   .dim { background: var(--dim-bg); color: var(--dim-fg); }
 
+  /* 应用详情 */
+  .app-head { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 2px; }
+  .app-idline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 2px; margin-top: 10px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .tabs a { flex: none; padding: 8px 13px; font-size: 13.5px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs a:hover { color: var(--fg); text-decoration: none; }
+  .tabs a.active { color: var(--fg); font-weight: 550; border-bottom-color: var(--accent); }
+  .fact-box {
+    font-family: var(--mono); font-size: 12px; line-height: 1.9;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  }
+  .kv-table { width: 100%; border-collapse: collapse; }
+  .kv-table td { padding: 5px 8px 5px 0; border: none; font-size: 13px; vertical-align: top; }
+  .kv-table td:first-child { color: var(--muted); width: 110px; white-space: nowrap; }
+  .kv-table td:last-child { overflow-wrap: anywhere; }
+
   /* 用量条（数值在文本中，色条仅辅助） */
   .usage-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
   .usage-label { flex: none; width: 40px; color: var(--muted); }
@@ -127,128 +209,206 @@
   .usage-fill { display: block; height: 100%; background: var(--accent); }
   .usage-num { font-size: 12px; color: var(--muted); }
 
-  /* 模态框 */
-  #modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; }
-  #modal[hidden] { display: none; }
-  #modal-backdrop { position: absolute; inset: 0; background: rgba(2, 6, 23, .55); }
-  #modal-card {
-    position: relative; width: 660px; max-width: 100%; max-height: 82vh; overflow-y: auto;
-    background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg);
-  }
-  #modal-head {
-    display: flex; justify-content: space-between; align-items: center; gap: 12px;
-    padding: 14px 20px; border-bottom: 1px solid var(--border);
-    position: sticky; top: 0; background: var(--card); border-radius: 12px 12px 0 0;
-  }
-  #modal-close { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; }
-  #modal-body { padding: 16px 20px 20px; }
-  #modal-body h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
-  #modal-body h3:first-child { margin-top: 0; }
-  .fact-box {
-    font-family: var(--mono); font-size: 12px; line-height: 1.9;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
-  }
-  .kv-table { width: 100%; border-collapse: collapse; }
-  .kv-table td { padding: 5px 8px 5px 0; border: none; font-size: 13px; vertical-align: top; }
-  .kv-table td:first-child { color: var(--muted); width: 96px; white-space: nowrap; }
-  .kv-table td:last-child { overflow-wrap: anywhere; }
+  /* 一致性检查 */
+  .finding { display: flex; gap: 10px; align-items: flex-start; padding: 10px 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); margin-bottom: 8px; }
+  .finding > div { min-width: 0; }
+  .finding .small { margin-top: 2px; }
 
-  @keyframes fade-in { from { opacity: 0; } }
-  @keyframes pop-in { from { opacity: 0; transform: translateY(10px) scale(.985); } }
-  @media (prefers-reduced-motion: no-preference) {
-    #modal:not([hidden]) #modal-backdrop { animation: fade-in .15s ease-out; }
-    #modal:not([hidden]) #modal-card { animation: pop-in .18s cubic-bezier(.2, .9, .3, 1); }
-  }
+  /* 信任中心 */
+  .mark { color: var(--faint); }
+  .mark.on { color: var(--fg); }
+  .net-targets span { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+  .net-targets .lan { color: var(--warn-fg); }
+  .hot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .hot-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 2px; border-bottom: 1px dashed var(--border); font-size: 13px; }
 
-  @media (max-width: 720px) {
-    body { padding: 16px 12px 40px; }
+  /* 存储占比条 */
+  .share { display: inline-block; width: 120px; height: 7px; border-radius: 4px; background: var(--track); overflow: hidden; vertical-align: middle; }
+  .share span { display: block; height: 100%; background: var(--accent); }
+
+  @media (max-width: 860px) {
+    body { grid-template-columns: 1fr; }
+    .side { position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px; border-right: none; border-bottom: 1px solid var(--border); padding: 10px 14px; }
+    .brand { padding: 0; }
+    .nav { flex-direction: row; overflow-x: auto; flex: 1; gap: 2px; }
+    .nav a { white-space: nowrap; }
+    .nav a.active { box-shadow: none; }
+    .side-foot { margin: 0 0 0 auto; padding: 0; border: none; max-width: 46%; }
+    main { padding: 14px 14px 48px; }
     th, td { padding: 8px 10px; }
-    #modal { padding: 16px 8px; }
-    #modal-body { padding: 12px 14px 16px; }
   }
 </style>
 </head>
 <body>
-<header class="page-head">
-  <div>
-    <h1>Pegboard 管理台</h1>
-    <div class="sub">宿主管理 · 应用 / 权限 / 限额 / 审计日志（只读元数据，无业务数据）· <span id="server-info"></span></div>
-  </div>
-  <div class="head-meta">
-    <span id="status">加载中…</span>
-    <button id="refresh" title="立即刷新（每 10 秒自动刷新）">刷新</button>
-  </div>
-</header>
+<aside class="side">
+  <a class="brand" href="#/" title="回到应用墙">
+    <svg width="20" height="20" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="4" fill="var(--accent)"/><circle cx="8" cy="8" r="3.4" fill="none" stroke="white" stroke-width="1.7"/><circle cx="8" cy="8" r="1.2" fill="white"/></svg>
+    <span class="brand-text"><strong>Pegboard</strong><span>管理台</span></span>
+  </a>
+  <nav class="nav" aria-label="主导航">
+    <a href="#/">应用墙</a>
+    <a href="#/trust">信任中心</a>
+    <a href="#/storage">存储</a>
+    <a href="#/audit">审计</a>
+    <a href="#/system">系统</a>
+  </nav>
+  <div class="side-foot"><span id="server-info"></span></div>
+</aside>
 
-<h2>应用 <span class="count" id="app-count"></span></h2>
-<div class="bar">
-  <input id="install-id" placeholder="应用 id（apps/ 目录名）" size="26" aria-label="应用 id（apps/ 目录名）" autocapitalize="none" spellcheck="false">
-  <button id="install">安装</button>
-  <span class="muted">或</span>
-  <input type="file" id="package" accept=".zip" hidden>
-  <button id="upload-package" title="上传 zip 应用包（包根含 manifest.json）">上传安装包</button>
-  <span class="muted" id="install-msg" aria-live="polite">按清单校验后注册；失败会显示原因</span>
-</div>
-<div class="table-wrap">
-  <table id="apps">
-    <thead><tr><th>应用</th><th>状态</th><th>操作</th></tr></thead>
-    <tbody id="apps-body"><tr><td colspan="3">加载中…</td></tr></tbody>
-  </table>
-</div>
-<p class="hint">点击行查看详情（支持 Enter 键）· 禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问 · 卸载保留产物与数据（重装即恢复），删除不可逆。</p>
-
-<h2>审计日志</h2>
-<p class="hint" style="margin-top: 0;">能力调用事件（静态访问不入审计）。</p>
-<div class="bar">
-  <select id="f-app" title="按应用过滤" aria-label="按应用过滤"><option value="">全部应用</option></select>
-  <select id="f-action" title="按动作过滤" aria-label="按动作过滤">
-    <option value="">全部动作</option>
-    <option>Store</option><option>Files</option><option>Net</option>
-    <option>Ws</option><option>Admin</option><option>Identity</option>
-  </select>
-  <select id="f-outcome" title="按结果过滤" aria-label="按结果过滤">
-    <option value="">全部结果</option>
-    <option>Ok</option><option>Denied</option><option>Error</option>
-  </select>
-  <select id="f-limit" title="每页条数" aria-label="每页条数">
-    <option>20</option><option selected>50</option><option>100</option><option>200</option>
-  </select>
-  <span class="muted" id="log-page"></span>
-  <button id="logs-prev" title="更新的事件" disabled>← 较新</button>
-  <button id="logs-next" title="更早的事件" disabled>较旧 →</button>
-</div>
-<div class="table-wrap">
-  <table id="logs">
-    <thead><tr><th>时间</th><th>应用</th><th>subject</th><th>动作</th><th>目标</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead>
-    <tbody id="logs-body"><tr><td colspan="8">加载中…</td></tr></tbody>
-  </table>
-</div>
-
-<h2>宿主 <span class="count" id="host-version"></span></h2>
-<div class="bar">
-  <button id="update-check">检查更新</button>
-  <span class="muted" id="update-msg" aria-live="polite"></span>
-  <button id="update-install" hidden>下载并安装</button>
-  <button id="host-restart" hidden class="danger" title="重启宿主进程以切换新版本">重启宿主</button>
-</div>
-
-<!-- 应用详情模态框 -->
-<div id="modal" hidden>
-  <div id="modal-backdrop"></div>
-  <div id="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-    <div id="modal-head">
-      <strong id="modal-title"></strong>
-      <button id="modal-close" title="关闭 (Esc)" aria-label="关闭">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-      </button>
+<main>
+  <header class="topbar">
+    <h1 id="view-title">应用墙</h1>
+    <div class="head-meta">
+      <span id="status">加载中…</span>
+      <button id="refresh" title="立即刷新（每 10 秒自动刷新当前页）">刷新</button>
     </div>
-    <div id="modal-body"></div>
-  </div>
-</div>
+  </header>
+
+  <!-- 应用墙 -->
+  <section id="view-wall" class="view">
+    <div class="bar">
+      <input id="install-id" placeholder="应用 id（apps/ 目录名）" size="26" aria-label="应用 id（apps/ 目录名）" autocapitalize="none" spellcheck="false">
+      <button id="install">安装</button>
+      <span class="muted">或</span>
+      <input type="file" id="package" accept=".zip" hidden>
+      <button id="upload-package" title="上传 zip 应用包（包根含 manifest.json）">上传安装包</button>
+      <span class="muted" id="install-msg" aria-live="polite">按清单校验后注册；失败会显示原因</span>
+    </div>
+    <div class="bar">
+      <input id="wall-q" type="search" placeholder="搜索 id、名称、entry、域名" size="24" aria-label="搜索应用">
+      <select id="wall-state" title="按状态筛选" aria-label="按状态筛选">
+        <option value="">全部状态</option>
+        <option value="enabled">启用</option><option value="disabled">禁用</option>
+        <option value="not_installed">未安装</option><option value="invalid">无效</option><option value="missing">缺失</option>
+      </select>
+      <select id="wall-perm" title="按权限筛选" aria-label="按权限筛选">
+        <option value="">全部权限</option><option>store</option><option>files</option><option>net</option><option>ws</option>
+      </select>
+      <select id="wall-sort" title="排序" aria-label="排序">
+        <option value="name">按名称</option><option value="installed">按最近安装</option>
+      </select>
+      <span class="muted" id="wall-count"></span>
+    </div>
+    <div id="apps">
+      <div id="apps-body" class="wall-grid"><div class="muted">加载中…</div></div>
+      <p class="hint">点击卡片查看详情 · 禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问 · 卸载保留产物与数据（重装即恢复），删除不可逆。</p>
+    </div>
+  </section>
+
+  <!-- 应用详情 -->
+  <section id="view-app" class="view" hidden>
+    <div class="app-head">
+      <div class="app-idline"><code id="app-id"></code><span id="app-state"></span></div>
+      <div class="head-meta" id="app-actions"></div>
+    </div>
+    <nav class="tabs" id="app-tabs" aria-label="应用详情分区"></nav>
+    <div id="app-pane">
+      <div id="pane-overview"></div>
+      <div id="pane-activity" hidden>
+        <div class="bar">
+          <select id="act-action" title="按动作过滤" aria-label="按动作过滤">
+            <option value="">全部动作</option>
+            <option>Store</option><option>Files</option><option>Net</option>
+            <option>Ws</option><option>Admin</option><option>Identity</option>
+          </select>
+          <select id="act-outcome" title="按结果过滤" aria-label="按结果过滤">
+            <option value="">全部结果</option><option>Ok</option><option>Denied</option><option>Error</option>
+          </select>
+          <select id="act-limit" title="每页条数" aria-label="每页条数">
+            <option>20</option><option selected>50</option><option>100</option><option>200</option>
+          </select>
+          <span class="muted" id="act-page"></span>
+          <button id="act-prev" title="更新的事件" disabled>← 较新</button>
+          <button id="act-next" title="更早的事件" disabled>较旧 →</button>
+        </div>
+        <div class="table-wrap">
+          <table id="act-logs">
+            <thead><tr><th>时间</th><th>subject</th><th>动作</th><th>目标</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead>
+            <tbody id="act-body"><tr><td colspan="7">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="pane-denied" hidden>
+        <p class="hint" style="margin-top: 8px;">如何修复提示按错误码给出；内网 / 本机地址始终被拦截。</p>
+        <div class="table-wrap">
+          <table id="den-logs">
+            <thead><tr><th>时间</th><th>动作</th><th>目标</th><th>错误码</th><th>耗时</th></tr></thead>
+            <tbody id="den-body"><tr><td colspan="5">加载中…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="bar">
+          <span class="muted" id="den-page"></span>
+          <button id="den-prev" title="更新的事件" disabled>← 较新</button>
+          <button id="den-next" title="更早的事件" disabled>较旧 →</button>
+        </div>
+      </div>
+      <div id="pane-consistency" hidden></div>
+    </div>
+  </section>
+
+  <!-- 信任中心 -->
+  <section id="view-trust" class="view" hidden>
+    <div id="trust-body"><div class="muted">加载中…</div></div>
+  </section>
+
+  <!-- 存储 -->
+  <section id="view-storage" class="view" hidden>
+    <div class="bar">
+      <button id="storage-export" title="下载应用列表 JSON（宿主元数据，不含业务数据）">导出应用列表</button>
+      <span class="muted">占用数据来自逐应用详情聚合，只统计字节与数量，不展示 key 与文件内容。</span>
+    </div>
+    <div id="storage-body"><div class="muted">加载中…</div></div>
+  </section>
+
+  <!-- 审计 -->
+  <section id="view-audit" class="view" hidden>
+    <div class="bar">
+      <select id="f-app" title="按应用过滤" aria-label="按应用过滤"><option value="">全部应用</option></select>
+      <input id="f-subject" placeholder="subject（回车应用）" size="14" aria-label="按 subject 过滤" spellcheck="false">
+      <select id="f-action" title="按动作过滤" aria-label="按动作过滤">
+        <option value="">全部动作</option>
+        <option>Store</option><option>Files</option><option>Net</option>
+        <option>Ws</option><option>Admin</option><option>Identity</option>
+      </select>
+      <select id="f-outcome" title="按结果过滤" aria-label="按结果过滤">
+        <option value="">全部结果</option><option>Ok</option><option>Denied</option><option>Error</option>
+      </select>
+      <select id="f-limit" title="每页条数" aria-label="每页条数">
+        <option>20</option><option selected>50</option><option>100</option><option>200</option>
+      </select>
+      <span class="muted" id="log-page"></span>
+      <button id="logs-prev" title="更新的事件" disabled>← 较新</button>
+      <button id="logs-next" title="更早的事件" disabled>较旧 →</button>
+    </div>
+    <div class="table-wrap">
+      <table id="logs">
+        <thead><tr><th>时间</th><th>应用</th><th>subject</th><th>动作</th><th>目标</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead>
+        <tbody id="logs-body"><tr><td colspan="8">加载中…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="hint">能力调用与 Admin 操作事件（静态访问不入审计）· 过滤条件写入地址栏，可分享。</p>
+  </section>
+
+  <!-- 系统 -->
+  <section id="view-system" class="view" hidden>
+    <div class="table-wrap">
+      <table class="kv-table" style="padding: 6px;"><tbody id="system-facts"><tr><td>加载中…</td></tr></tbody></table>
+    </div>
+    <h2>宿主升级 <span class="count" id="host-version"></span></h2>
+    <div class="bar">
+      <button id="update-check">检查更新</button>
+      <span class="muted" id="update-msg" aria-live="polite"></span>
+      <button id="update-install" hidden>下载并安装</button>
+      <button id="host-restart" hidden class="danger" title="重启宿主进程以切换新版本">重启宿主</button>
+    </div>
+    <p class="hint">系统页只读；配置是文件，不在界面改。</p>
+  </section>
+</main>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+const enc = encodeURIComponent;
 
 // 所有插值一律转义：应用名 / 日志字段来自第三方内容（清单、目标域名），防注入
 function esc(s) {
@@ -308,24 +468,31 @@ function relTime(ts) {
   return Math.round(d / 86_400_000) + " 天前";
 }
 
-function setBody(sel, html) {
-  $(sel.slice(1)).innerHTML = html;
+function fmtUptime(secs) {
+  const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), m = Math.floor((secs % 3600) / 60);
+  if (d) return d + " 天 " + h + " 小时";
+  if (h) return h + " 小时 " + m + " 分";
+  return Math.max(1, m) + " 分钟";
+}
+
+function errorBox(e, retry) {
+  const div = document.createElement("div");
+  div.className = "error-box";
+  div.innerHTML =
+    '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " +
+    esc(e.message || e) + ' <button>重试</button> <a href="#/">返回应用墙</a>';
+  div.querySelector("button").addEventListener("click", retry);
+  return div;
 }
 
 function errorRow(cols, e, retry) {
   const tr = document.createElement("tr");
-  tr.innerHTML =
-    '<td colspan="' + cols + '">' +
-    '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " +
-    esc(e.message || e) + " " +
-    '<button>重试</button></td>';
-  tr.querySelector("button").addEventListener("click", retry);
+  tr.innerHTML = '<td colspan="' + cols + '"></td>';
+  tr.firstChild.appendChild(errorBox(e, retry));
   return tr;
 }
 
-// ---------- 应用列表 ----------
-
-let appsCache = [];
+// ---------- 路由（hash） ----------
 
 const STATE_LABEL = {
   enabled: "启用", disabled: "禁用",
@@ -335,103 +502,308 @@ const STATE_CLASS = {
   enabled: "ok", disabled: "dim",
   not_installed: "dim", invalid: "err", missing: "warn",
 };
+const OUTCOME_CLASS = { Ok: "ok", Denied: "warn", Error: "err" };
+const VIEW_TITLES = { wall: "应用墙", trust: "信任中心", storage: "存储", audit: "审计", system: "系统" };
 
-async function loadApps() {
-  if (appsInFlight) return;
-  appsInFlight = true;
-  $("apps").setAttribute("aria-busy", "true");
-  try {
-    appsCache = await j("/api/admin/apps");
-    const tbody = $("apps-body");
-    tbody.innerHTML = "";
-    if (!appsCache.length) {
-      setBody("#apps-body",
-        '<tr><td colspan="3">没有已注册应用；把应用放进 apps/ 目录后，在上方输入 id 安装</td></tr>');
-    }
-    for (const a of appsCache) {
-      const tr = document.createElement("tr");
-      tr.className = "clickable";
-      tr.tabIndex = 0;
-      tr.dataset.id = a.id;
-      const label = STATE_LABEL[a.state] || a.state;
-      const pillClass = STATE_CLASS[a.state] || "dim";
-      const registered = a.state === "enabled" || a.state === "disabled";
-      const nameCell = registered
-        ? '<a href="/apps/' + esc(a.id) + '/" target="_blank" rel="noopener noreferrer" title="打开应用">' + esc(a.name) + '</a>' +
-          ' <code class="muted">' + esc(a.id) + '</code>' +
-          '<div class="mono muted">' + esc(a.entry) + '</div>'
-        : '<span>' + esc(a.name) + '</span>' +
-          ' <code class="muted">' + esc(a.id) + '</code>' +
-          (a.error ? '<div class="mono muted">' + esc(a.error) + '</div>' : '');
-      // 状态 → 动词矩阵（数据模型 §9）
-      const acts = [];
-      if (a.state === "enabled") {
-        acts.push('<button data-act="disable" title="禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问">禁用</button>');
-      }
-      if (a.state === "disabled") {
-        acts.push('<button data-act="enable" title="恢复能力 API 访问">启用</button>');
-      }
-      if (a.state === "enabled" || a.state === "disabled" || a.state === "missing") {
-        acts.push('<button data-act="uninstall" title="注销应用并删除签名 token；产物与数据目录保留，重装即恢复">卸载</button>');
-      }
-      if (a.state === "not_installed") {
-        acts.push('<button data-act="install" title="校验清单并注册（注册为启用）">安装</button>');
-      }
-      acts.push('<button data-act="delete" class="danger" title="删除产物目录与数据目录；不可逆">删除</button>');
-      tr.innerHTML =
-        "<td>" + nameCell + "</td>" +
-        '<td><span class="pill ' + pillClass + '">' + esc(label) + "</span></td>" +
-        "<td>" + acts.join(" ") + "</td>";
-      tbody.appendChild(tr);
-    }
-    $("app-count").textContent = appsCache.length ? "共 " + appsCache.length + " 个" : "";
-    tbody.querySelectorAll("button[data-act]").forEach((b) => {
-      b.addEventListener("click", async (ev) => {
-        ev.stopPropagation();
-        const id = b.closest("tr").dataset.id;
-        const act = b.getAttribute("data-act");
-        if (act === "uninstall" &&
-            !confirm("卸载 " + id + "：注销应用并删除签名 token；产物与数据目录保留，重装即恢复。继续？")) return;
-        if (act === "delete" &&
-            !confirm("删除 " + id + "：移除产物目录与全部数据目录，不可恢复。确定删除？")) return;
-        try {
-          // delete 是 DELETE /api/admin/apps/{id}；其余为 POST /api/admin/apps/{id}/{act}
-          const url = act === "delete"
-            ? "/api/admin/apps/" + encodeURIComponent(id)
-            : "/api/admin/apps/" + encodeURIComponent(id) + "/" + act;
-          await j(url, { method: act === "delete" ? "DELETE" : "POST" });
-          await refreshAll();
-        } catch (e) {
-          alert((e.code ? e.code + " " : "") + e.message);
-        }
-      });
-    });
-    // 应用过滤下拉：保留当前选择
-    const sel = $("f-app");
-    const current = sel.value;
-    sel.innerHTML = '<option value="">全部应用</option>' +
-      appsCache.map((a) => '<option value="' + esc(a.id) + '">' + esc(a.id) + "</option>").join("");
-    sel.value = current;
-    $("status").textContent = "更新于 " + new Date().toLocaleTimeString();
-  } catch (e) {
-    setBody("#apps-body", "");
-    $("apps-body").appendChild(errorRow(3, e, loadApps));
-    $("status").textContent = "刷新失败";
-  } finally {
-    $("apps").removeAttribute("aria-busy");
-    appsInFlight = false;
+let routeCtx = { view: "wall", query: {} };
+
+function parseHash() {
+  const raw = location.hash.replace(/^#/, "");
+  const qIdx = raw.indexOf("?");
+  const path = qIdx < 0 ? raw : raw.slice(0, qIdx);
+  const qs = qIdx < 0 ? "" : raw.slice(qIdx + 1);
+  const query = {};
+  for (const kv of qs.split("&")) {
+    if (!kv) continue;
+    const i = kv.indexOf("=");
+    try {
+      const k = decodeURIComponent(i < 0 ? kv : kv.slice(0, i));
+      query[k] = i < 0 ? "" : decodeURIComponent(kv.slice(i + 1));
+    } catch (_) {}
+  }
+  const seg = path.split("/").filter(Boolean);
+  if (!seg.length) return { view: "wall", query };
+  if (seg[0] === "apps" && seg[1]) {
+    let id = seg[1];
+    try { id = decodeURIComponent(id); } catch (_) {}
+    const tab = ["overview", "activity", "denied", "consistency"].includes(seg[2]) ? seg[2] : "overview";
+    return { view: "app", id, tab, query };
+  }
+  if (["trust", "storage", "audit", "system"].includes(seg[0])) return { view: seg[0], query };
+  return { view: "wall", query };
+}
+
+function route() {
+  const r = parseHash();
+  routeCtx = r;
+  const title = r.view === "app" ? r.id : VIEW_TITLES[r.view];
+  $("view-title").textContent = title;
+  document.title = title + " · Pegboard 管理台";
+  for (const v of ["wall", "app", "trust", "storage", "audit", "system"]) {
+    $("view-" + v).hidden = v !== r.view;
+  }
+  document.querySelectorAll(".nav a").forEach((a) => {
+    const active = (r.view === "wall" || r.view === "app")
+      ? a.getAttribute("href") === "#/"
+      : a.getAttribute("href") === "#/" + r.view;
+    a.classList.toggle("active", active);
+    if (active) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  switch (r.view) {
+    case "wall": loadApps(); break;
+    case "app": loadAppDetail(r.id, r.tab); break;
+    case "trust": loadTrust(); break;
+    case "storage": loadStorage(); break;
+    case "audit":
+      initAuditFilters(r.query);
+      auditLogs.reset();
+      auditLogs.load();
+      break;
+    case "system": loadStatus(); pollUpdateOnce(); break;
   }
 }
+
+function loadCurrentView() {
+  const r = routeCtx;
+  switch (r.view) {
+    case "wall": return loadApps();
+    case "app": return r.tab === "overview" ? loadAppDetail(r.id, r.tab) : Promise.resolve();
+    case "trust": return loadTrust();
+    case "storage": return loadStorage();
+    case "audit": return auditLogs.load();
+    case "system": return pollUpdateOnce();
+  }
+}
+
+// ---------- 应用数据 ----------
+
+let appsCache = [];
+let appsPromise = null;
+
+function fetchApps() {
+  // 并发调用共享同一次请求；落定后清空，下次取新
+  if (!appsPromise) {
+    appsPromise = j("/api/admin/apps")
+      .then((d) => { appsCache = d || []; fillAppSelect(); return appsCache; })
+      .finally(() => { appsPromise = null; });
+  }
+  return appsPromise;
+}
+
+function fillAppSelect() {
+  const sel = $("f-app");
+  const current = sel.value;
+  sel.innerHTML = '<option value="">全部应用</option>' +
+    appsCache.map((a) => '<option value="' + esc(a.id) + '">' + esc(a.id) + "</option>").join("");
+  sel.value = current;
+}
+
+// ---------- 应用墙 ----------
+
+let appsBusy = false, appsDirty = false;
+
+function hasPerm(a, p) {
+  const v = (a.permissions || {})[p];
+  return Array.isArray(v) ? v.length > 0 : v === true;
+}
+
+function permBadges(p) {
+  const out = [];
+  if (p.store === true) out.push("store");
+  if (p.files === true) out.push("files");
+  if (Array.isArray(p.net) && p.net.length) out.push("net");
+  if (Array.isArray(p.ws) && p.ws.length) out.push("ws");
+  return out.map((x) => '<span class="perm">' + x + "</span>").join("")
+    || '<span class="muted small">无声明权限</span>';
+}
+
+function limitsLine(l) {
+  const parts = [];
+  if (l.kv_total_bytes) parts.push("KV " + fmtBytes(l.kv_total_bytes));
+  if (l.file_total_bytes) parts.push("文件 " + fmtBytes(l.file_total_bytes));
+  if (l.net_rps) parts.push(l.net_rps + " rps");
+  return parts.join(" · ");
+}
+
+function actionsHtml(state) {
+  const b = [];
+  if (state === "enabled") {
+    b.push('<button data-act="disable" title="禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问">禁用</button>');
+  }
+  if (state === "disabled") {
+    b.push('<button data-act="enable" title="恢复能力 API 访问">启用</button>');
+  }
+  if (state === "enabled" || state === "disabled" || state === "missing") {
+    b.push('<button data-act="uninstall" title="注销应用并删除签名 token；产物与数据目录保留，重装即恢复">卸载</button>');
+  }
+  if (state === "not_installed") {
+    b.push('<button data-act="install" title="校验清单并注册（注册为启用）">安装</button>');
+  }
+  b.push('<button data-act="delete" class="danger" title="删除产物目录与数据目录；不可逆">删除</button>');
+  return b.join("");
+}
+
+function cardHtml(a) {
+  const label = STATE_LABEL[a.state] || a.state;
+  const pc = STATE_CLASS[a.state] || "dim";
+  const openable = a.entry && a.state !== "missing";
+  const lim = limitsLine(a.limits || {});
+  return '<article class="app-card" data-id="' + esc(a.id) + '">' +
+    '<div class="card-head">' +
+      '<span class="peg" aria-hidden="true">' + esc(String(a.name || a.id || "?")[0]) + "</span>" +
+      '<div class="card-title">' +
+        (openable
+          ? '<a class="card-name" href="/apps/' + enc(a.id) + '/" target="_blank" rel="noopener noreferrer" title="打开应用">' + esc(a.name) + "</a>"
+          : '<span class="card-name">' + esc(a.name) + "</span>") +
+        '<a class="card-id mono" href="#/apps/' + enc(a.id) + '" title="查看详情">' + esc(a.id) + "</a>" +
+      "</div>" +
+      '<span class="pill ' + pc + '">' + esc(label) + "</span>" +
+    "</div>" +
+    '<div class="card-badges">' + permBadges(a.permissions || {}) + "</div>" +
+    (a.entry ? '<div class="card-meta mono">entry ' + esc(a.entry) + "</div>" : "") +
+    (lim ? '<div class="card-meta mono">' + esc(lim) + "</div>" : "") +
+    (a.error ? '<div class="card-meta mono err-text">' + esc(a.error) + "</div>" : "") +
+    '<div class="card-foot"><span class="muted small">' +
+      (a.installed_at ? "安装于 " + relTime(a.installed_at) : "未注册") + "</span>" +
+      '<span class="card-actions">' + actionsHtml(a.state) + "</span>" +
+    "</div>" +
+  "</article>";
+}
+
+function renderWall() {
+  const q = ($("wall-q").value || "").trim().toLowerCase();
+  const st = $("wall-state").value;
+  const pm = $("wall-perm").value;
+  const sort = $("wall-sort").value;
+  const list = appsCache.filter((a) => {
+    if (st && a.state !== st) return false;
+    if (pm && !hasPerm(a, pm)) return false;
+    if (q) {
+      const p = a.permissions || {};
+      const hay = [a.id, a.name, a.entry]
+        .concat(Array.isArray(p.net) ? p.net : [], Array.isArray(p.ws) ? p.ws : [])
+        .join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  list.sort((a, b) => sort === "installed"
+    ? (b.installed_at || 0) - (a.installed_at || 0) || a.id.localeCompare(b.id)
+    : a.id.localeCompare(b.id));
+  $("wall-count").textContent = appsCache.length
+    ? "共 " + appsCache.length + " · 显示 " + list.length : "";
+  const body = $("apps-body");
+  if (!appsCache.length) {
+    body.innerHTML =
+      '<div class="empty"><div class="dots" aria-hidden="true"></div>' +
+      "<p>apps/ 目录还没有应用。把应用目录放进 apps/ 后，在上方输入 id 安装，或上传 zip 应用包。</p></div>";
+    return;
+  }
+  if (!list.length) {
+    body.innerHTML =
+      '<div class="empty"><p>没有匹配筛选条件的应用。</p><button id="wall-clear">清除筛选</button></div>';
+    body.querySelector("#wall-clear").addEventListener("click", () => {
+      $("wall-q").value = ""; $("wall-state").value = ""; $("wall-perm").value = "";
+      renderWall();
+    });
+    return;
+  }
+  body.innerHTML = list.map(cardHtml).join("");
+}
+
+async function loadApps() {
+  if (appsBusy) { appsDirty = true; return; }
+  appsBusy = true;
+  $("apps-body").setAttribute("aria-busy", "true");
+  try {
+    // 过滤条件可能在请求期间变化：落定后如过时则重跑一次
+    do {
+      appsDirty = false;
+      await fetchApps();
+      renderWall();
+    } while (appsDirty);
+  } catch (e) {
+    const body = $("apps-body");
+    body.innerHTML = "";
+    body.appendChild(errorBox(e, loadApps));
+    $("status").textContent = "刷新失败";
+  } finally {
+    $("apps-body").removeAttribute("aria-busy");
+    appsBusy = false;
+  }
+}
+
+for (const id of ["wall-q", "wall-state", "wall-perm", "wall-sort"]) {
+  $(id).addEventListener("input", renderWall);
+  $(id).addEventListener("change", renderWall);
+}
+
+// 卡片点击 → 详情（按钮与链接除外）
+$("apps-body").addEventListener("click", (ev) => {
+  if (ev.target.closest("button") || ev.target.closest("a")) return;
+  const card = ev.target.closest(".app-card");
+  if (card) location.hash = "#/apps/" + enc(card.dataset.id);
+});
+
+// ---------- 应用操作（卡片 / 详情头 / 存储行共用） ----------
+
+async function appAction(id, act) {
+  if (act === "uninstall" &&
+      !confirm("卸载 " + id + "：注销应用并删除签名 token；产物与数据目录保留，重装即恢复。继续？")) return;
+  if (act === "delete" &&
+      !confirm("删除 " + id + "：移除产物目录与全部数据目录，不可恢复。确定删除？")) return;
+  try {
+    const url = act === "delete"
+      ? "/api/admin/apps/" + enc(id)
+      : "/api/admin/apps/" + enc(id) + "/" + act;
+    await j(url, { method: act === "delete" ? "DELETE" : "POST" });
+    if ((act === "delete" || act === "uninstall") && routeCtx.view === "app" && routeCtx.id === id) {
+      location.hash = "#/";
+      return;
+    }
+    await fetchApps();
+    await loadCurrentView();
+  } catch (e) {
+    alert((e.code ? e.code + " " : "") + e.message);
+  }
+}
+
+document.addEventListener("click", (ev) => {
+  const copyBtn = ev.target.closest("button[data-copy]");
+  if (copyBtn) {
+    copyText(copyBtn.getAttribute("data-copy"), copyBtn);
+    return;
+  }
+  const b = ev.target.closest("button[data-act]");
+  if (!b) return;
+  const host = b.closest("[data-id]");
+  if (!host) return;
+  appAction(host.dataset.id, b.getAttribute("data-act"));
+});
+
+async function copyText(text, btn) {
+  const old = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = "已复制";
+  } catch (_) {
+    btn.textContent = "复制失败";
+  }
+  setTimeout(() => { btn.textContent = old; }, 1500);
+}
+
+// ---------- 安装 ----------
 
 $("install").addEventListener("click", async () => {
   const id = $("install-id").value.trim();
   if (!id) return;
   $("install-msg").textContent = "安装中…";
   try {
-    await j("/api/admin/apps/" + encodeURIComponent(id) + "/install", { method: "POST" });
+    await j("/api/admin/apps/" + enc(id) + "/install", { method: "POST" });
     $("install-msg").textContent = "已安装 " + id;
     $("install-id").value = "";
-    await refreshAll();
+    await fetchApps();
+    await loadCurrentView();
   } catch (e) {
     $("install-msg").innerHTML =
       '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
@@ -452,14 +824,198 @@ $("package").addEventListener("change", async () => {
     const d = await j("/api/admin/apps/package", { method: "POST", body: form });
     $("install-msg").textContent = "已安装 " + (d && d.id ? d.id : file.name);
     $("package").value = "";
-    await refreshAll();
+    await fetchApps();
+    await loadCurrentView();
   } catch (e) {
     $("install-msg").innerHTML =
       '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
   }
 });
 
-// ---------- 应用详情模态框 ----------
+// ---------- 审计事件流（应用墙 / 详情 / 审计共用一套渲染） ----------
+
+const DENY_HINT = {
+  PERMISSION_DENIED: "应用调用了未声明的能力：在 manifest 的 permissions 中补充对应权限，或修正应用调用。",
+  TARGET_DENIED: "目标不在 permissions.net 白名单中：确认目标后加入白名单；内网 / 本机地址会被强制拦截。",
+  LIMIT_EXCEEDED: "超出限额：结合「概览 · 实际用量」与 manifest 的 limits 调整。",
+};
+
+const AUDIT_COLS = [
+  { k: "time", h: "时间" }, { k: "app", h: "应用" }, { k: "subject", h: "subject" },
+  { k: "action", h: "动作" }, { k: "target", h: "目标" }, { k: "outcome", h: "结果" },
+  { k: "error", h: "错误码" }, { k: "ms", h: "耗时" },
+];
+const ACT_COLS = AUDIT_COLS.filter((c) => c.k !== "app");
+const DEN_COLS = AUDIT_COLS.filter((c) => ["time", "action", "target", "error", "ms"].includes(c.k));
+
+function rowHtml(e, cols) {
+  return "<tr>" + cols.map((c) => {
+    switch (c.k) {
+      case "time": return '<td class="muted" title="' + esc(new Date(e.ts).toLocaleString()) + '">' + esc(relTime(e.ts)) + "</td>";
+      case "app": return "<td><code>" + esc(e.app_id || "-") + "</code></td>";
+      case "subject": return "<td>" + esc(e.subject || "-") + "</td>";
+      case "action": return "<td>" + esc(e.action) + "</td>";
+      case "target": return '<td class="mono" title="' + esc(e.target || "") + '">' + esc(e.target || "-") + "</td>";
+      case "outcome": return '<td><span class="pill ' + (OUTCOME_CLASS[e.outcome] || "dim") + '">' + esc(e.outcome) + "</span></td>";
+      case "error": return '<td class="mono">' + esc(e.error_code || "-") + "</td>";
+      case "ms": return "<td>" + esc(e.duration_ms) + " ms</td>";
+    }
+  }).join("") + "</tr>";
+}
+
+// cfg: { appFixed | get appFixed(), fixed: {outcome|action|…固定过滤}, fApp, fSubject,
+//        fAction, fOutcome, fLimit, table, tbody, prev, next, page, columns,
+//        hintRow, emptyText(), onFilter }
+function makeLogsView(cfg) {
+  const st = { page: 1, before: null, after: null, next: null, prev: null, items: [] };
+  let busy = false, dirty = false;
+
+  function filters() {
+    const f = Object.assign({}, cfg.fixed || null);
+    f.limit = cfg.fLimit ? $(cfg.fLimit).value : (cfg.limit || "50");
+    const app = cfg.appFixedRef ? cfg.appFixedRef() : cfg.appFixed;
+    if (app) f.app = app;
+    else if (cfg.fApp && $(cfg.fApp).value) f.app = $(cfg.fApp).value;
+    if (cfg.fSubject && $(cfg.fSubject).value.trim()) f.subject = $(cfg.fSubject).value.trim();
+    if (cfg.fAction && $(cfg.fAction).value) f.action = $(cfg.fAction).value;
+    if (cfg.fOutcome && $(cfg.fOutcome).value) f.outcome = $(cfg.fOutcome).value;
+    return f;
+  }
+
+  function query() {
+    const f = filters();
+    const q = new URLSearchParams();
+    for (const k of ["app", "subject", "action", "outcome", "limit"]) if (f[k]) q.set(k, f[k]);
+    if (st.before) q.set("before", st.before);
+    if (st.after) q.set("after", st.after);
+    return q.toString();
+  }
+
+  function render() {
+    const tbody = $(cfg.tbody);
+    const cols = cfg.columns;
+    tbody.innerHTML = "";
+    if (!st.items.length) {
+      const msg = cfg.emptyText ? cfg.emptyText() : "暂无事件";
+      tbody.innerHTML = '<tr><td colspan="' + cols.length + '">' + esc(msg) + "</td></tr>";
+    }
+    for (const e of st.items) {
+      tbody.insertAdjacentHTML("beforeend", rowHtml(e, cols));
+      if (cfg.hintRow && e.outcome === "Denied" && DENY_HINT[e.error_code]) {
+        tbody.insertAdjacentHTML("beforeend",
+          '<tr class="hint-row"><td colspan="' + cols.length + '">如何修复 — ' + esc(DENY_HINT[e.error_code]) + "</td></tr>");
+      }
+    }
+    if (cfg.page) $(cfg.page).textContent = "第 " + st.page + " 页";
+    if (cfg.prev) $(cfg.prev).disabled = !st.prev;
+    if (cfg.next) $(cfg.next).disabled = !st.next;
+  }
+
+  async function load() {
+    if (busy) { dirty = true; return; }
+    busy = true;
+    $(cfg.table).setAttribute("aria-busy", "true");
+    try {
+      do {
+        dirty = false;
+        const page = await j("/api/admin/logs?" + query());
+        st.items = page.items || [];
+        st.next = page.next || null;
+        st.prev = page.prev || null;
+        render();
+      } while (dirty);
+    } catch (e) {
+      const tbody = $(cfg.tbody);
+      tbody.innerHTML = "";
+      tbody.appendChild(errorRow(cfg.columns.length, e, load));
+    } finally {
+      $(cfg.table).removeAttribute("aria-busy");
+      busy = false;
+    }
+  }
+
+  function reset() {
+    st.page = 1; st.before = null; st.after = null;
+  }
+
+  for (const id of [cfg.fApp, cfg.fSubject, cfg.fAction, cfg.fOutcome, cfg.fLimit]) {
+    if (!id) continue;
+    $(id).addEventListener("change", () => {
+      reset();
+      if (cfg.onFilter) cfg.onFilter();
+      load();
+    });
+  }
+  if (cfg.prev) $(cfg.prev).addEventListener("click", () => {
+    if (!st.prev) return;
+    st.after = st.prev; st.before = null; st.page = Math.max(1, st.page - 1);
+    load();
+  });
+  if (cfg.next) $(cfg.next).addEventListener("click", () => {
+    if (!st.next) return;
+    st.before = st.next; st.after = null; st.page += 1;
+    load();
+  });
+
+  return { load, reset, st };
+}
+
+// ---------- 审计视图（过滤条件写入 hash，可分享） ----------
+
+function initAuditFilters(q) {
+  $("f-app").value = q.app || "";
+  $("f-subject").value = q.subject || "";
+  $("f-action").value = q.action || "";
+  $("f-outcome").value = "outcome" in q ? q.outcome : "Denied";
+  $("f-limit").value = q.limit || "50";
+}
+
+function syncAuditUrl() {
+  const q = new URLSearchParams();
+  for (const [k, id] of [["app", "f-app"], ["subject", "f-subject"], ["action", "f-action"], ["outcome", "f-outcome"], ["limit", "f-limit"]]) {
+    const v = $(id).value;
+    if (v && !(k === "limit" && v === "50")) q.set(k, v);
+  }
+  const s = q.toString();
+  history.replaceState(null, "", "#/audit" + (s ? "?" + s : ""));
+}
+
+const auditLogs = makeLogsView({
+  fApp: "f-app", fSubject: "f-subject", fAction: "f-action",
+  fOutcome: "f-outcome", fLimit: "f-limit",
+  table: "logs", tbody: "logs-body", prev: "logs-prev", next: "logs-next", page: "log-page",
+  columns: AUDIT_COLS, hintRow: false,
+  emptyText: () => $("f-outcome").value === "Denied"
+    ? "窗口内没有被拒请求：能力调用都在声明范围内。"
+    : "窗口内没有事件；调整过滤条件或换页大小。",
+  onFilter: syncAuditUrl,
+});
+
+// ---------- 应用详情 ----------
+
+const APP_TABS = [["overview", "概览"], ["activity", "活动"], ["denied", "拒绝记录"], ["consistency", "一致性检查"]];
+
+let activityApp = null, deniedApp = null;
+
+const activityLogs = makeLogsView({
+  appFixedRef: () => activityApp,
+  fAction: "act-action", fOutcome: "act-outcome", fLimit: "act-limit",
+  table: "act-logs", tbody: "act-body", prev: "act-prev", next: "act-next", page: "act-page",
+  columns: ACT_COLS, hintRow: false,
+  emptyText: () => "该应用在窗口内没有此类事件。",
+});
+const deniedLogs = makeLogsView({
+  appFixedRef: () => deniedApp,
+  fixed: { outcome: "Denied" },
+  table: "den-logs", tbody: "den-body", prev: "den-prev", next: "den-next", page: "den-page",
+  columns: DEN_COLS, hintRow: true, limit: "50",
+  emptyText: () => "窗口内没有被拒请求：能力调用都在声明范围内。",
+});
+
+function showAppPane(tab) {
+  const map = { overview: "pane-overview", activity: "pane-activity", denied: "pane-denied", consistency: "pane-consistency" };
+  for (const k of Object.keys(map)) $(map[k]).hidden = k !== tab;
+}
 
 function usageLine(label, used, max, count, unit) {
   const pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
@@ -473,160 +1029,348 @@ function usageLine(label, used, max, count, unit) {
   );
 }
 
-let lastFocused = null;
+function renderOverview(d) {
+  const p = d.permissions || {};
+  const perms = ["store: " + (p.store === true), "files: " + (p.files === true)]
+    .concat(Array.isArray(p.net) && p.net.length ? ["net: " + p.net.join(", ")] : [])
+    .concat(Array.isArray(p.ws) && p.ws.length ? ["ws: " + p.ws.join(", ")] : [])
+    .concat(["shim: " + (p.shim === true)]);
+  const l = d.limits || {};
+  $("pane-overview").innerHTML =
+    '<table class="kv-table">' +
+    '<tr><td>状态</td><td><span class="pill ' + (STATE_CLASS[d.state] || "dim") + '">' + esc(STATE_LABEL[d.state] || d.state || "—") + "</span></td></tr>" +
+    '<tr><td>入口</td><td class="mono">' + esc(d.entry) + "</td></tr>" +
+    '<tr><td>安装时间</td><td>' + (d.installed_at ? esc(new Date(d.installed_at).toLocaleString()) : "—") + "</td></tr>" +
+    '<tr><td>产物目录</td><td class="mono">' + esc(d.root) + ' <button class="copy" data-copy="' + esc(d.root) + '">复制</button></td></tr>' +
+    '<tr><td>数据目录</td><td class="mono">' + esc(d.data_dir) + ' <button class="copy" data-copy="' + esc(d.data_dir) + '">复制</button></td></tr>' +
+    "</table>" +
+    "<h3>权限</h3>" + '<div class="fact-box">' + perms.map(esc).join("<br>") + "</div>" +
+    "<h3>限额（生效）</h3>" + '<div class="fact-box">' +
+      esc("kv " + fmtBytes(l.kv_value_bytes) + " / " + fmtBytes(l.kv_total_bytes) +
+        " · file " + fmtBytes(l.file_bytes) + " / " + fmtBytes(l.file_total_bytes) +
+        " · " + l.net_rps + " rps · sign_ttl " + l.sign_ttl_max + "s") + "</div>" +
+    "<h3>实际用量</h3>" +
+    usageLine("KV", d.usage.kv.bytes, l.kv_total_bytes, d.usage.kv.keys, "键") +
+    usageLine("文件", d.usage.files.bytes, l.file_total_bytes, d.usage.files.count, "个");
+}
 
-async function openModal(id) {
-  lastFocused = document.activeElement;
-  $("modal-title").textContent = id;
-  $("modal-body").innerHTML = '<div class="muted">读取详情中…</div>';
-  $("modal").hidden = false;
-  $("modal-close").focus();
+let appBusy = false, appDirty = false;
+
+async function loadAppDetail(id, tab) {
+  if (appBusy) { appDirty = true; return; }
+  appBusy = true;
   try {
-    const d = await j("/api/admin/apps/" + encodeURIComponent(id));
-    const label = STATE_LABEL[d.state] || d.state || "—";
-    const perms = [
-      ["store", d.permissions.store], ["files", d.permissions.files],
-      ["shim", d.permissions.shim],
-    ].map(([k, v]) => k + ": " + v)
-     .concat(
-       d.permissions.net.length ? ["net: " + d.permissions.net.join(", ")] : [],
-       d.permissions.ws.length ? ["ws: " + d.permissions.ws.join(", ")] : []
-     );
-    $("modal-title").textContent = d.name + "（" + d.id + "）";
-    $("modal-body").innerHTML =
-      '<table class="kv-table">' +
-      '<tr><td>状态</td><td><span class="pill ' + (STATE_CLASS[d.state] || "dim") + '">' + esc(label) + "</span></td></tr>" +
-      '<tr><td>入口</td><td class="mono">' + esc(d.entry) +
-        ' <a href="/apps/' + esc(d.id) + '/" target="_blank" rel="noopener noreferrer">打开 ↗</a></td></tr>' +
-      '<tr><td>安装时间</td><td>' + (d.installed_at ? esc(new Date(d.installed_at).toLocaleString()) : "—") + "</td></tr>" +
-      '<tr><td>产物目录</td><td class="mono">' + esc(d.root) + "</td></tr>" +
-      '<tr><td>数据目录</td><td class="mono">' + esc(d.data_dir) + "</td></tr>" +
-      "</table>" +
-      "<h3>权限</h3>" + '<div class="fact-box">' + perms.map(esc).join("<br>") + "</div>" +
-      "<h3>限额（生效）</h3>" + '<div class="fact-box">' +
-        esc("kv " + fmtBytes(d.limits.kv_value_bytes) + " / " + fmtBytes(d.limits.kv_total_bytes) +
-          " · file " + fmtBytes(d.limits.file_bytes) + " / " + fmtBytes(d.limits.file_total_bytes) +
-          " · " + d.limits.net_rps + " rps · sign_ttl " + d.limits.sign_ttl_max + "s") + "</div>" +
-      "<h3>实际用量</h3>" +
-      usageLine("KV", d.usage.kv.bytes, d.limits.kv_total_bytes, d.usage.kv.keys, "键") +
-      usageLine("文件", d.usage.files.bytes, d.limits.file_total_bytes, d.usage.files.count, "个");
-  } catch (e) {
-    $("modal-body").innerHTML =
-      '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
-  }
-}
-
-function closeModal() {
-  $("modal").hidden = true;
-  if (lastFocused && lastFocused.isConnected) lastFocused.focus();
-  lastFocused = null;
-}
-$("modal-close").addEventListener("click", closeModal);
-$("modal-backdrop").addEventListener("click", closeModal);
-document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && !$("modal").hidden) closeModal();
-});
-// 焦点圈定：Tab 在模态框内循环
-$("modal-card").addEventListener("keydown", (ev) => {
-  if (ev.key !== "Tab") return;
-  const focusables = $("modal-card")
-    .querySelectorAll('button:not(:disabled), a[href], input, select, [tabindex]:not([tabindex="-1"])');
-  if (!focusables.length) return;
-  const first = focusables[0];
-  const last = focusables[focusables.length - 1];
-  if (ev.shiftKey && document.activeElement === first) {
-    last.focus();
-    ev.preventDefault();
-  } else if (!ev.shiftKey && document.activeElement === last) {
-    first.focus();
-    ev.preventDefault();
-  }
-});
-
-// ---------- 审计日志（双向分页）----------
-
-const OUTCOME_CLASS = { Ok: "ok", Denied: "warn", Error: "err" };
-// 分页状态：before/after 固定当前页位置；page 仅用于展示
-const logs = { page: 1, before: null, after: null, next: null, prev: null, items: [] };
-
-function logQuery() {
-  const q = new URLSearchParams();
-  if ($("f-app").value) q.set("app", $("f-app").value);
-  if ($("f-action").value) q.set("action", $("f-action").value);
-  if ($("f-outcome").value) q.set("outcome", $("f-outcome").value);
-  q.set("limit", $("f-limit").value);
-  if (logs.before) q.set("before", logs.before);
-  if (logs.after) q.set("after", logs.after);
-  return q.toString();
-}
-
-function renderLogs() {
-  const tbody = $("logs-body");
-  tbody.innerHTML = "";
-  if (!logs.items.length) {
-    setBody("#logs-body", '<tr><td colspan="8">暂无事件（过滤条件或时间范围内没有能力调用）</td></tr>');
-  }
-  for (const e of logs.items) {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      '<td class="muted" title="' + esc(new Date(e.ts).toLocaleString()) + '">' + esc(relTime(e.ts)) + "</td>" +
-      "<td><code>" + esc(e.app_id || "-") + "</code></td>" +
-      "<td>" + esc(e.subject || "-") + "</td>" +
-      "<td>" + esc(e.action) + "</td>" +
-      '<td class="mono">' + esc(e.target || "-") + "</td>" +
-      '<td><span class="pill ' + (OUTCOME_CLASS[e.outcome] || "dim") + '">' + esc(e.outcome) + "</span></td>" +
-      '<td class="mono">' + esc(e.error_code || "-") + "</td>" +
-      "<td>" + esc(e.duration_ms) + " ms</td>";
-    tbody.appendChild(tr);
-  }
-  $("log-page").textContent = "第 " + logs.page + " 页";
-  $("logs-next").disabled = !logs.next;
-  $("logs-prev").disabled = !logs.prev;
-}
-
-async function loadLogs() {
-  if (logsInFlight) return;
-  logsInFlight = true;
-  $("logs").setAttribute("aria-busy", "true");
-  try {
-    const page = await j("/api/admin/logs?" + logQuery());
-    logs.items = page.items || [];
-    logs.next = page.next || null;
-    logs.prev = page.prev || null;
-    renderLogs();
-  } catch (e) {
-    setBody("#logs-body", "");
-    $("logs-body").appendChild(errorRow(8, e, loadLogs));
+    // 请求期间路由可能已变化（appDirty）：每轮取当前路由，落定为止
+    for (;;) {
+      appDirty = false;
+      const ctx = routeCtx;
+      if (ctx.view !== "app") break;
+      const curId = ctx.id, curTab = ctx.tab;
+      showAppPane(curTab);
+      $("app-tabs").innerHTML = APP_TABS.map(([k, label]) =>
+        '<a href="#/apps/' + enc(curId) + "/" + k + '"' + (k === curTab ? ' class="active" aria-current="page"' : "") + ">" + label + "</a>").join("");
+      $("app-id").textContent = curId;
+      $("app-state").innerHTML = "";
+      $("app-actions").innerHTML = "";
+      $("view-title").textContent = curId;
+      let d;
+      try {
+        d = await j("/api/admin/apps/" + enc(curId));
+      } catch (e) {
+        showAppPane("overview");
+        $("pane-overview").innerHTML = "";
+        $("pane-overview").appendChild(errorBox(e, () => loadAppDetail(curId, curTab)));
+        if (!appDirty) break;
+        continue;
+      }
+      if (routeCtx.view !== "app" || routeCtx.id !== curId) break; // 已切走
+      $("view-title").textContent = d.name;
+      $("app-id").textContent = d.id;
+      $("app-state").innerHTML = '<span class="pill ' + (STATE_CLASS[d.state] || "dim") + '">' +
+        esc(STATE_LABEL[d.state] || d.state || "—") + "</span>";
+      $("view-app").dataset.id = d.id;
+      $("app-actions").innerHTML =
+        (d.entry && d.state !== "missing"
+          ? '<a class="btn" href="/apps/' + enc(d.id) + '/" target="_blank" rel="noopener noreferrer">打开应用 ↗</a>' : "") +
+        actionsHtml(d.state);
+      if (curTab === "overview") {
+        renderOverview(d);
+      } else if (curTab === "activity") {
+        activityApp = curId;
+        activityLogs.reset();
+        await activityLogs.load();
+      } else if (curTab === "denied") {
+        deniedApp = curId;
+        deniedLogs.reset();
+        await deniedLogs.load();
+      } else {
+        await renderConsistency(d);
+      }
+      if (!appDirty) break;
+    }
   } finally {
-    $("logs").removeAttribute("aria-busy");
-    logsInFlight = false;
+    appBusy = false;
   }
 }
 
-$("logs-next").addEventListener("click", () => {
-  if (!logs.next) return;
-  logs.before = logs.next;
-  logs.after = null;
-  logs.page += 1;
-  loadLogs();
-});
-$("logs-prev").addEventListener("click", () => {
-  if (!logs.prev) return;
-  logs.after = logs.prev;
-  logs.before = null;
-  logs.page = Math.max(1, logs.page - 1);
-  loadLogs();
-});
-for (const id of ["f-app", "f-action", "f-outcome", "f-limit"]) {
-  $(id).addEventListener("change", () => {
-    logs.page = 1;
-    logs.before = null;
-    logs.after = null;
-    loadLogs();
-  });
+async function renderConsistency(d) {
+  const pane = $("pane-consistency");
+  pane.innerHTML = '<div class="muted">推导中…</div>';
+  const base = "/api/admin/logs?app=" + enc(d.id);
+  const reqs = await Promise.allSettled([
+    (d.permissions.net || []).length ? j(base + "&action=Net&outcome=Ok&limit=1") : Promise.resolve({ items: [{}] }),
+    (d.permissions.ws || []).length ? j(base + "&action=Ws&outcome=Ok&limit=1") : Promise.resolve({ items: [{}] }),
+    j(base + "&outcome=Denied&limit=100"),
+  ]);
+  const netUsed = reqs[0].status === "fulfilled" && reqs[0].value.items.length > 0;
+  const wsUsed = reqs[1].status === "fulfilled" && reqs[1].value.items.length > 0;
+  const denied = reqs[2].status === "fulfilled" ? (reqs[2].value.items || []) : [];
+  const l = d.limits || {};
+  const usage = d.usage || { kv: { bytes: 0, keys: 0 }, files: { bytes: 0, count: 0 } };
+  const findings = [];
+
+  if ((d.permissions.net || []).length && !netUsed) {
+    findings.push(["warn", "声明了 net 但窗口内从未成功使用。", "若应用确需联网，检查目标连通性；否则从 manifest 移除 permissions.net。"]);
+  }
+  if ((d.permissions.ws || []).length && !wsUsed) {
+    findings.push(["warn", "声明了 ws 但窗口内从未成功使用。", "若不需要长连接，从 manifest 移除 permissions.ws。"]);
+  }
+  if (d.permissions.store === true && usage.kv.bytes === 0) {
+    findings.push(["warn", "声明了 store 但没有任何 KV 数据。", "确认应用是否需要 KV；不用就从 manifest 移除。"]);
+  }
+  if (d.permissions.files === true && usage.files.count === 0) {
+    findings.push(["warn", "声明了 files 但没有任何文件。", "确认应用是否需要文件能力；不用就从 manifest 移除。"]);
+  }
+  const pctOf = (used, max) => max > 0 ? Math.round((used / max) * 100) : 0;
+  const kvPct = pctOf(usage.kv.bytes, l.kv_total_bytes);
+  const filePct = pctOf(usage.files.bytes, l.file_total_bytes);
+  if (kvPct >= 80) {
+    findings.push([kvPct >= 100 ? "err" : "warn",
+      "KV 用量已达 " + kvPct + "%（" + fmtBytes(usage.kv.bytes) + " / " + fmtBytes(l.kv_total_bytes) + "）。",
+      "提高 manifest 的 limits.kv_total_bytes，或清理应用数据。"]);
+  }
+  if (filePct >= 80) {
+    findings.push([filePct >= 100 ? "err" : "warn",
+      "文件用量已达 " + filePct + "%（" + fmtBytes(usage.files.bytes) + " / " + fmtBytes(l.file_total_bytes) + "）。",
+      "提高 manifest 的 limits.file_total_bytes，或清理应用文件。"]);
+  }
+  const permDenied = {}, targetDenied = {};
+  for (const e of denied) {
+    if (e.error_code === "PERMISSION_DENIED") permDenied[e.action] = (permDenied[e.action] || 0) + 1;
+    else if (e.error_code === "TARGET_DENIED" && e.target) targetDenied[e.target] = (targetDenied[e.target] || 0) + 1;
+  }
+  const pd = Object.entries(permDenied);
+  if (pd.length) {
+    findings.push(["warn",
+      "调用了未声明的能力：" + pd.map(([a, n]) => a + " ×" + n).join("、") + "。",
+      "在 manifest 的 permissions 中补充，或修正应用调用。"]);
+  }
+  const td = Object.entries(targetDenied).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  if (td.length) {
+    findings.push(["warn",
+      "使用了白名单外的目标：" + td.map(([t, n]) => t + " ×" + n).join("、") + "。",
+      "确认目标无误后加入 permissions.net 白名单。"]);
+  }
+
+  pane.innerHTML = findings.length
+    ? findings.map(([sev, text, fix]) =>
+        '<div class="finding"><span class="pill ' + sev + '">' + (sev === "err" ? "偏差" : "注意") + "</span>" +
+        "<div><div>" + esc(text) + '</div><div class="muted small">建议：' + esc(fix) + "</div></div></div>").join("")
+    : '<div class="empty-ok">未发现偏差：窗口内声明与实际行为一致。</div>';
+  const foot = document.createElement("p");
+  foot.className = "hint";
+  foot.textContent = "结论基于当前快照与可见日志窗口（审计为有界队列，可能丢弃旧事件），不自动修改 manifest。";
+  pane.appendChild(foot);
 }
 
-// ---------- 宿主升级（仅手动触发）----------
+// ---------- 信任中心 ----------
+
+function isLanTarget(t) {
+  try {
+    const u = new URL(t);
+    const h = u.hostname;
+    if (h === "localhost" || h.endsWith(".localhost")) return true;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) {
+      const [a, b] = h.split(".").map(Number);
+      return a === 10 || a === 127 || a === 0 ||
+        (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+    }
+    if (h.includes(":")) {
+      const s = h.toLowerCase();
+      return s === "::1" || s.startsWith("fc") || s.startsWith("fd") || s.startsWith("fe80");
+    }
+    return false;
+  } catch (_) {
+    const s = String(t);
+    return s.includes("127.0.0.1") || s.includes("localhost");
+  }
+}
+
+let trustBusy = false;
+
+async function loadTrust() {
+  if (trustBusy) return;
+  trustBusy = true;
+  const body = $("trust-body");
+  body.setAttribute("aria-busy", "true");
+  try {
+    await fetchApps();
+    const denied = await j("/api/admin/logs?outcome=Denied&limit=200").catch(() => ({ items: [] }));
+    renderTrust(denied.items || []);
+  } catch (e) {
+    body.innerHTML = "";
+    body.appendChild(errorBox(e, loadTrust));
+  } finally {
+    trustBusy = false;
+    body.removeAttribute("aria-busy");
+  }
+}
+
+function renderTrust(deniedItems) {
+  const mark = (on) => on ? '<span class="mark on" title="已声明">●</span>' : '<span class="mark" title="未声明">·</span>';
+  const rows = appsCache.slice().sort((a, b) => a.id.localeCompare(b.id));
+  const matrix = rows.map((a) => {
+    const p = a.permissions || {};
+    const net = Array.isArray(p.net) ? p.net : [];
+    return "<tr>" +
+      '<td><a href="#/apps/' + enc(a.id) + '">' + esc(a.name) + '</a> <code class="muted">' + esc(a.id) + "</code></td>" +
+      "<td>" + mark(p.store === true) + "</td>" +
+      "<td>" + mark(p.files === true) + "</td>" +
+      "<td>" + mark(net.length > 0) + "</td>" +
+      "<td>" + mark((p.ws || []).length > 0) + "</td>" +
+      '<td class="mono net-targets">' + (net.length
+        ? net.map((t) => '<span class="' + (isLanTarget(t) ? "lan" : "") + '" title="' + esc(t) + '">' + esc(t) + "</span>").join(" ")
+        : "—") + "</td>" +
+      "</tr>";
+  }).join("");
+
+  const lanApps = rows.filter((a) => (Array.isArray(a.permissions && a.permissions.net) ? a.permissions.net : []).some(isLanTarget));
+  const lanHtml = lanApps.length
+    ? lanApps.map((a) => {
+        const targets = a.permissions.net.filter(isLanTarget);
+        return '<div class="hot-row"><span><a href="#/apps/' + enc(a.id) + '"><code>' + esc(a.id) + "</code></a></span>" +
+          '<span class="mono net-targets">' + targets.map((t) => '<span class="lan" title="' + esc(t) + '">' + esc(t) + "</span>").join(" ") + "</span></div>";
+      }).join("")
+    : '<p class="muted">没有应用的白名单包含内网 / 本机地址。</p>';
+
+  const recent = rows
+    .filter((a) => a.installed_at > 0)
+    .sort((a, b) => b.installed_at - a.installed_at)
+    .slice(0, 5);
+  const recentHtml = recent.length
+    ? recent.map((a) => '<div class="hot-row"><span><a href="#/apps/' + enc(a.id) + '"><code>' + esc(a.id) + "</code></a> " + esc(a.name) + "</span>" +
+        '<span class="muted small">' + relTime(a.installed_at) + "</span></div>").join("")
+    : '<p class="muted">还没有已注册应用。</p>';
+
+  const byApp = {}, byTarget = {};
+  for (const e of deniedItems) {
+    if (e.app_id) byApp[e.app_id] = (byApp[e.app_id] || 0) + 1;
+    if (e.target) byTarget[e.target] = (byTarget[e.target] || 0) + 1;
+  }
+  const top = (m) => Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const hotList = (pairs, linkApp) => pairs.length
+    ? pairs.map(([k, n]) => '<div class="hot-row"><span class="mono">' + (linkApp ? '<a href="#/apps/' + enc(k) + '">' + esc(k) + "</a>" : esc(k)) + "</span>" +
+        '<span class="muted small">× ' + n + "</span></div>").join("")
+    : '<p class="muted">窗口内没有被拒请求。</p>';
+
+  $("trust-body").innerHTML =
+    "<h2>权限矩阵 <span class=\"count\">谁声明了什么</span></h2>" +
+    '<div class="table-wrap"><table><thead><tr><th>应用</th><th>store</th><th>files</th><th>net</th><th>ws</th><th>net 白名单</th></tr></thead>' +
+    "<tbody>" + (matrix || '<tr><td colspan="6">没有应用</td></tr>') + "</tbody></table></div>" +
+    "<h2>内网访问</h2>" + lanHtml +
+    "<h2>最近安装</h2>" + recentHtml +
+    "<h2>拒绝热点 <span class=\"count\">最近 200 条 Denied</span></h2>" +
+    '<div class="hot-grid"><div><h3>按应用</h3>' + hotList(top(byApp), true) + "</div>" +
+    "<div><h3>按目标</h3>" + hotList(top(byTarget), false) + "</div></div>";
+}
+
+// ---------- 存储 ----------
+
+let storageBusy = false;
+let lastStorageExport = [];
+
+async function loadStorage() {
+  if (storageBusy) return;
+  storageBusy = true;
+  const body = $("storage-body");
+  body.setAttribute("aria-busy", "true");
+  try {
+    await fetchApps();
+    const reg = appsCache.filter((a) => ["enabled", "disabled", "missing"].includes(a.state));
+    const details = await Promise.allSettled(reg.map((a) => j("/api/admin/apps/" + enc(a.id))));
+    const rows = details.filter((r) => r.status === "fulfilled").map((r) => r.value);
+    rows.sort((a, b) =>
+      (b.usage.kv.bytes + b.usage.files.bytes) - (a.usage.kv.bytes + a.usage.files.bytes) || a.id.localeCompare(b.id));
+    const maxTotal = Math.max(1, ...rows.map((r) => r.usage.kv.bytes + r.usage.files.bytes));
+    lastStorageExport = rows.map((r) => ({ id: r.id, name: r.name, state: r.state, kv: r.usage.kv, files: r.usage.files, limits: r.limits }));
+    if (!rows.length) {
+      body.innerHTML = '<div class="empty"><p>没有已注册应用，没有可统计的占用。</p></div>';
+      return;
+    }
+    body.innerHTML = '<div class="table-wrap"><table><thead><tr><th>应用</th><th>KV</th><th>文件</th><th>合计</th><th>相对占比</th><th>操作</th></tr></thead><tbody>' +
+      rows.map((r) => {
+        const total = r.usage.kv.bytes + r.usage.files.bytes;
+        const w = Math.round((total / maxTotal) * 100);
+        return '<tr data-id="' + esc(r.id) + '">' +
+          '<td><a href="#/apps/' + enc(r.id) + '">' + esc(r.name) + '</a> <code class="muted">' + esc(r.id) + "</code></td>" +
+          '<td class="mono">' + fmtBytes(r.usage.kv.bytes) + ' <span class="muted small">/ ' + r.usage.kv.keys + " 键</span></td>" +
+          '<td class="mono">' + fmtBytes(r.usage.files.bytes) + ' <span class="muted small">/ ' + r.usage.files.count + " 个</span></td>" +
+          '<td class="mono">' + fmtBytes(total) + "</td>" +
+          '<td><span class="share" aria-hidden="true"><span style="width:' + w + '%"></span></span></td>' +
+          '<td><button data-act="delete" class="danger" title="删除产物目录与数据目录；不可逆">删除</button></td>' +
+          "</tr>";
+      }).join("") + "</tbody></table></div>" +
+      '<p class="hint">合计 = KV 字节 + 文件字节。宿主总量无配额数据，不做总量，只做各应用相对占比。</p>';
+  } catch (e) {
+    body.innerHTML = "";
+    body.appendChild(errorBox(e, loadStorage));
+  } finally {
+    storageBusy = false;
+    body.removeAttribute("aria-busy");
+  }
+}
+
+$("storage-export").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(lastStorageExport, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "pegboard-apps.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ---------- 系统 ----------
+
+async function loadStatus() {
+  try {
+    const s = await j("/api/admin/status");
+    renderSystem(s);
+    $("status").textContent = "更新于 " + new Date().toLocaleTimeString();
+  } catch (_) {
+    $("status").textContent = "状态获取失败";
+  }
+}
+
+function renderSystem(s) {
+  $("server-info").textContent =
+    "v" + s.version + " · " + s.mode + " · " + s.listen +
+    " · 运行 " + fmtUptime(s.uptime_secs) +
+    (s.audit_dropped ? " · 审计丢弃 " + s.audit_dropped : "");
+  const rows = [
+    ["版本", "v" + s.version],
+    ["模式", s.mode === "lan" ? "lan（局域网）" : "local（本机）"],
+    ["身份来源", s.identity],
+    ["监听地址", s.listen],
+    ["数据目录", s.data_root],
+    ["应用目录", s.apps_dir],
+    ["运行时长", fmtUptime(s.uptime_secs)],
+    ["审计队列丢弃", s.audit_dropped ? '<span class="pill warn">' + s.audit_dropped + "</span>" : "0"],
+  ];
+  $("system-facts").innerHTML = rows.map(([k, v]) =>
+    "<tr><td>" + esc(k) + '</td><td class="mono">' + v + "</td></tr>").join("");
+}
+
+// ---------- 宿主升级（仅手动触发） ----------
 
 let lastPhase = null;
 let updatePolling = false;
@@ -727,52 +1471,23 @@ $("host-restart").addEventListener("click", async () => {
 
 // ---------- 刷新 ----------
 
-let appsInFlight = false;
-let logsInFlight = false;
-
-function loadStatus() {
-  j("/api/admin/status").then((s) => {
-    $("server-info").textContent =
-      "v" + s.version + " · " + s.mode + " · " + s.listen +
-      " · 运行 " + Math.round(s.uptime_secs / 60) + " 分钟" +
-      (s.audit_dropped ? " · 审计丢弃 " + s.audit_dropped : "");
-  }).catch(() => {
-    $("server-info").textContent = "";
-  });
-}
-
-async function refreshAll() {
-  await Promise.allSettled([loadApps(), loadLogs(), loadStatus(), pollUpdateOnce()]);
-}
-
-$("refresh").addEventListener("click", refreshAll);
+$("refresh").addEventListener("click", () => {
+  Promise.allSettled([loadStatus(), loadCurrentView()]);
+});
 setInterval(() => {
-  if (document.visibilityState !== "visible" || appsInFlight || logsInFlight) return;
+  if (document.visibilityState !== "visible") return;
+  loadStatus();
   // 停留在第 1 页时才自动刷新日志（翻页中游标固定位置，避免跳动）
-  if (logs.page === 1) {
-    Promise.allSettled([loadApps(), loadLogs(), loadStatus()]);
-  } else {
-    loadApps();
-  }
+  if (routeCtx.view === "audit" && auditLogs.st.page !== 1) return;
+  if (routeCtx.view === "app" && routeCtx.tab !== "overview") return;
+  loadCurrentView();
 }, 10_000);
 
-// 行点击 / 回车打开详情
-$("apps-body").addEventListener("click", (ev) => {
-  if (ev.target.closest("button") || ev.target.closest("a")) return;
-  const tr = ev.target.closest("tr[data-id]");
-  if (tr) openModal(tr.dataset.id);
-});
-$("apps-body").addEventListener("keydown", (ev) => {
-  if (ev.key !== "Enter" && ev.key !== " ") return;
-  if (ev.target.closest("button") || ev.target.closest("a")) return;
-  const tr = ev.target.closest("tr[data-id]");
-  if (tr) {
-    ev.preventDefault();
-    openModal(tr.dataset.id);
-  }
-});
+// ---------- 启动 ----------
 
-refreshAll();
+window.addEventListener("hashchange", route);
+route();
+loadStatus();
 </script>
 </body>
 </html>
