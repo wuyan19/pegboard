@@ -570,7 +570,8 @@ struct UpdaterInner {
 /// 更新状态机。挂在 AppState；仅手动触发（管理页按钮），进行中重复触发为 no-op。
 /// std Mutex 且持锁不跨 await：所有 await 前取完状态或数据，guard 当行释放。
 pub struct Updater {
-    manifest_url: Option<String>,
+    /// 更新源：GitHub Releases 稳定端点（写死；信任锚是编译期内嵌公钥，与 URL 无关）。
+    manifest_url: String,
     /// 客户端构造失败（TLS 后端异常）置 None：升级不可用但不影响服务。
     client: Option<reqwest::Client>,
     /// 下载临时文件落点（data_root/tmp，文件名带 pid 防并发冲突）。
@@ -579,21 +580,14 @@ pub struct Updater {
 }
 
 impl Updater {
-    /// 更新源解析：配置给值用配置（自建通道），留空用内置 GitHub Releases 默认。
-    pub fn new(manifest_url: &str, tmp_dir: PathBuf) -> Self {
+    pub fn new(tmp_dir: PathBuf) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| tracing::error!(error = %e, "update http client build failed"))
             .ok();
-        let configured = manifest_url.trim();
-        let resolved = if configured.is_empty() {
-            default_manifest_url()
-        } else {
-            configured.to_owned()
-        };
         Self {
-            manifest_url: Some(resolved),
+            manifest_url: default_manifest_url(),
             client,
             tmp_dir,
             inner: Mutex::new(UpdaterInner {
@@ -646,10 +640,10 @@ impl Updater {
     }
 
     async fn run_check(&self) {
-        let (Some(client), Some(url)) = (&self.client, self.manifest_url.as_deref()) else {
+        let Some(client) = &self.client else {
             return;
         };
-        let outcome = fetch_manifest(client, url).await;
+        let outcome = fetch_manifest(client, &self.manifest_url).await;
         let result = outcome.and_then(|body| check_body(&body, env!("CARGO_PKG_VERSION")));
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         match result {
@@ -1029,19 +1023,11 @@ mod tests {
 
     #[tokio::test]
     async fn updater_status_and_guards() {
-        // 空配置 → 内置 GitHub 默认源；配置值 → 原样使用
-        let u = Arc::new(Updater::new("", std::env::temp_dir()));
+        // 更新源写死为内置 GitHub 默认端点
+        let u = Arc::new(Updater::new(std::env::temp_dir()));
         assert_eq!(u.status_json()["source"], default_manifest_url());
         assert!(u.spawn_check().is_ok());
         assert!(u.spawn_install().is_err(), "Idle 状态不允许安装");
-        let u2 = Arc::new(Updater::new(
-            "http://example.test/manifest.json",
-            std::env::temp_dir(),
-        ));
-        assert_eq!(
-            u2.status_json()["source"],
-            "http://example.test/manifest.json"
-        );
     }
 
     #[test]

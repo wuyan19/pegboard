@@ -35,7 +35,7 @@ cargo run --release -p pegboard-cli
 |---|---|
 | `--config <路径>` | 配置文件（缺省查找 `$PEGBOARD_CONFIG` → `./config.toml`） |
 | `--listen` / `--data-root` / `--apps-dir` | 覆盖监听地址 / 数据根 / 应用产物目录 |
-| `--check` | 只校验配置与应用清单，不启动服务（退出码 0/1/2） |
+| `--check` | 只校验配置与应用清单，不启动服务（退出码 0/1） |
 | `--no-tray` | 无头服务模式（ssh / 开机自启；有 GUI 时默认尝试托盘） |
 
 macOS 打包出 `dist/Pegboard.app`（托盘常驻、双击启动）：

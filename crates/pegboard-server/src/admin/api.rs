@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use axum::extract::multipart::MultipartError;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State, State as ExtractState};
-use axum::http::{header, StatusCode};
-use axum::middleware::Next;
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -18,7 +17,7 @@ use pegboard_core::files::FilesError;
 use crate::ingress::error::{code, ApiError};
 use crate::ingress::AppState;
 
-/// 管理 API 路由，挂 /api/admin/*。设置了管理 token 时全部端点要求 Bearer 鉴权。
+/// 管理 API 路由，挂 /api/admin/*。设置了访问密码时全部端点要求会话鉴权。
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/admin/status", get(status))
@@ -34,6 +33,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/admin/apps/{id}/enable", post(enable_app))
         .route("/api/admin/apps/{id}/disable", post(disable_app))
         .route("/api/admin/logs", get(list_logs))
+        .route("/api/admin/config", get(get_config).put(put_config))
         .route("/api/admin/host/restart", post(host_restart))
         .route("/api/admin/update/status", get(update_status))
         .route("/api/admin/update/check", post(update_check))
@@ -49,51 +49,12 @@ fn multipart_error(e: MultipartError) -> ApiError {
     }
 }
 
-/// 管理鉴权：配置了 token（env PEGBOARD_ADMIN_TOKEN）时校验 Bearer 凭证。
-pub async fn auth_middleware(
-    ExtractState(state): ExtractState<Arc<AppState>>,
-    req: axum::extract::Request,
-    next: Next,
-) -> Response {
-    let Some(expected) = &state.admin_token else {
-        return next.run(req).await;
-    };
-    let provided = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
-    if fixed_time_eq(provided.as_bytes(), expected.as_bytes()) {
-        next.run(req).await
-    } else {
-        ApiError::new(
-            code::TOKEN_INVALID,
-            401,
-            "管理鉴权失败：缺少或错误的 Bearer token",
-        )
-        .into_response()
-    }
-}
-
-/// 定长比较，防时序侧信道。
-fn fixed_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
 /// 宿主自身状态（只读元数据，不含业务数据）。
 #[derive(serde::Serialize)]
 struct StatusView {
     version: &'static str,
-    mode: &'static str,
-    identity: &'static str,
+    /// lan = listen 非环回（局域网可达）；local = 仅本机。由 listen 派生，非配置项。
+    exposure: &'static str,
     listen: String,
     data_root: String,
     apps_dir: String,
@@ -102,20 +63,14 @@ struct StatusView {
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<StatusView> {
-    let cfg = &state.config;
-    let mode = match cfg.server.mode {
-        pegboard_core::config::Mode::Local => "local",
-        pegboard_core::config::Mode::Lan => "lan",
-    };
-    let identity = match &cfg.identity {
-        pegboard_core::config::IdentityConfig::Fixed { .. } => "fixed",
-        pegboard_core::config::IdentityConfig::Forwarded { .. } => "forwarded",
-        pegboard_core::config::IdentityConfig::Tokens { .. } => "tokens",
-    };
+    let cfg = state.config();
     Json(StatusView {
         version: env!("CARGO_PKG_VERSION"),
-        mode,
-        identity,
+        exposure: if cfg.server.is_lan_exposed() {
+            "lan"
+        } else {
+            "local"
+        },
         listen: cfg.server.listen.to_string(),
         data_root: cfg.storage.data_root.display().to_string(),
         apps_dir: cfg.storage.apps_dir.display().to_string(),
@@ -234,8 +189,9 @@ async fn list_apps(State(state): State<Arc<AppState>>) -> Result<Response, ApiEr
     // 磁盘扫描 + 候选校验是文件 IO：spawn_blocking（项目契约：async 上下文禁阻塞 IO）
     let installed_ids: std::collections::HashSet<String> =
         metas.iter().map(|m| m.id.clone()).collect();
-    let apps_dir = state.config.storage.apps_dir.clone();
-    let limits = state.config.limits;
+    let cfg = state.config();
+    let apps_dir = cfg.storage.apps_dir.clone();
+    let limits = cfg.limits;
     let candidates = tokio::task::spawn_blocking(move || {
         let mut out: Vec<(String, Option<pegboard_core::app::AppMeta>, Option<String>)> =
             Vec::new();
@@ -300,7 +256,7 @@ async fn get_app(
                     ApiError::new(code::UPSTREAM_ERROR, 502, format!("host.db: {e}"))
                 })?;
                 let (enabled, installed_at) = states.get(&id).copied().unwrap_or((true, 0));
-                let dir_gone = !state.config.storage.apps_dir.join(&id).is_dir();
+                let dir_gone = !state.config().storage.apps_dir.join(&id).is_dir();
                 let state_str = if dir_gone {
                     "missing"
                 } else if enabled {
@@ -311,8 +267,9 @@ async fn get_app(
                 (meta, state_str, enabled, installed_at)
             }
             Err(_) => {
-                let apps_dir = state.config.storage.apps_dir.clone();
-                let limits = state.config.limits;
+                let cfg = state.config();
+                let apps_dir = cfg.storage.apps_dir.clone();
+                let limits = cfg.limits;
                 let id2 = id.clone();
                 let candidate = tokio::task::spawn_blocking(move || {
                     pegboard_core::app::load_candidate(&apps_dir, &id2, &limits).ok()
@@ -343,7 +300,7 @@ async fn get_app(
     view["usage"] = app_usage(&state, &meta).await;
     view["root"] = json!(meta.root.display().to_string());
     view["data_dir"] = json!(state
-        .config
+        .config()
         .storage
         .data_root
         .join("apps_data")
@@ -357,7 +314,7 @@ async fn get_app(
 /// 未使用过的应用没有落库文件，直接报 0（避免惰性打开产生副作用）。
 async fn app_usage(state: &Arc<AppState>, meta: &pegboard_core::app::AppMeta) -> serde_json::Value {
     let app_dir = state
-        .config
+        .config()
         .storage
         .data_root
         .join("apps_data")
@@ -501,7 +458,7 @@ async fn delete_app(
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
     let registered = state.app_meta_static(&id).is_ok();
-    let artifacts = state.config.storage.apps_dir.join(&id);
+    let artifacts = state.config().storage.apps_dir.join(&id);
     // 删除对三种形态生效：已注册、有残留行（缺失）、磁盘候选（未安装）
     let has_row = state
         .host_db
@@ -555,7 +512,277 @@ async fn delete_app(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// Admin 操作审计事件（target = 应用 id）。
+/// 当前生效配置（管理页「配置」视图数据源）。
+async fn get_config(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
+    let cfg = state.config();
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "config_path": state.config_path.as_ref().map(|p| p.display().to_string()),
+            "has_config_file": state.config_path.is_some(),
+            "listen": cfg.server.listen.to_string(),
+            "lan_exposed": cfg.server.is_lan_exposed(),
+            "limits": {
+                "kv_value_bytes": cfg.limits.kv_value_bytes,
+                "kv_total_bytes": cfg.limits.kv_total_bytes,
+                "file_bytes": cfg.limits.file_bytes,
+                "file_total_bytes": cfg.limits.file_total_bytes,
+                "net_rps": cfg.limits.net_rps,
+                "sign_ttl_max": cfg.limits.sign_ttl_max,
+            },
+            "storage": {
+                "data_root": cfg.storage.data_root.display().to_string(),
+                "apps_dir": cfg.storage.apps_dir.display().to_string(),
+            },
+        })),
+    )
+        .into_response())
+}
+
+#[derive(Deserialize)]
+struct ConfigUpdate {
+    listen: Option<String>,
+    limits: Option<pegboard_core::config::Limits>,
+    storage: Option<StorageUpdate>,
+}
+
+#[derive(Deserialize)]
+struct StorageUpdate {
+    data_root: Option<String>,
+    apps_dir: Option<String>,
+}
+
+/// 在线修改配置：listen（重启生效，写前 preflight 试绑定）+ limits（热生效，
+/// 逐应用重载重算生效限额）。写回配置文件（tmp + rename 原子）。
+async fn put_config(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ConfigUpdate>,
+) -> Result<Response, ApiError> {
+    let Some(cfg_path) = state.config_path.clone() else {
+        return Err(ApiError::new(
+            code::INVALID_REQUEST,
+            409,
+            "当前为全默认启动（无配置文件），请先创建 config.toml 再在线修改",
+        ));
+    };
+    let current = state.config();
+    let mut new_limits = current.limits;
+    if let Some(l) = &body.limits {
+        new_limits = *l;
+    }
+    let new_listen = match &body.listen {
+        Some(s) => s
+            .parse::<std::net::SocketAddr>()
+            .map_err(|e| ApiError::invalid_request(format!("listen 非法: {e}")))?,
+        None => current.server.listen,
+    };
+
+    // storage 变更：仅接受绝对路径（相对路径的重定基随启动方式不同而异，
+    // 在线写入无法确定落点）；两个目录不能相同。
+    let mut new_storage = current.storage.clone();
+    if let Some(s) = &body.storage {
+        for (name, raw, slot) in [
+            (
+                "数据目录",
+                s.data_root.as_deref(),
+                &mut new_storage.data_root,
+            ),
+            ("应用目录", s.apps_dir.as_deref(), &mut new_storage.apps_dir),
+        ] {
+            let Some(p) = raw.map(str::trim).filter(|p| !p.is_empty()) else {
+                continue;
+            };
+            let path = std::path::PathBuf::from(p);
+            if !path.is_absolute() {
+                return Err(ApiError::invalid_request(format!(
+                    "{name}需为绝对路径（收到 \"{p}\"），相对路径会随启动方式重定基，无法确定落点"
+                )));
+            }
+            *slot = path;
+        }
+        if new_storage.data_root == new_storage.apps_dir {
+            return Err(ApiError::new(
+                code::INVALID_REQUEST,
+                409,
+                "数据目录与应用目录不能是同一路径",
+            ));
+        }
+    }
+    let storage_changed = new_storage != current.storage;
+
+    // 校验：限额自洽（复用 core 校验规则）
+    let probe = pegboard_core::config::Config {
+        server: pegboard_core::config::ServerConfig { listen: new_listen },
+        limits: new_limits,
+        storage: new_storage.clone(),
+    };
+    pegboard_core::config::validate(&probe)
+        .map_err(|e| ApiError::invalid_request(e.to_string()))?;
+
+    let listen_changed = new_listen != current.server.listen;
+    let limits_changed = new_limits != current.limits;
+    if !listen_changed && !limits_changed && !storage_changed {
+        return Ok((
+            StatusCode::OK,
+            Json(json!({"applied": [], "restart_required": false})),
+        )
+            .into_response());
+    }
+
+    // listen 变更的门槛与 preflight：
+    // - 局域网开放要求已设访问密码（避免「环回外 + 无密码」态）；
+    // - 试绑定新地址，被占（或已有实例）直接拒绝，杜绝「保存了却起不来」。
+    if listen_changed {
+        if !new_listen.ip().is_loopback()
+            && state
+                .host_db
+                .get_password_hash()
+                .map_err(|e| ApiError::internal(format!("host.db: {e}")))?
+                .is_none()
+        {
+            return Err(ApiError::new(
+                code::INVALID_REQUEST,
+                409,
+                "局域网开放前请先在系统页设置访问密码",
+            ));
+        }
+        if tokio::net::TcpListener::bind(new_listen).await.is_err() {
+            return Err(ApiError::new(
+                code::INVALID_REQUEST,
+                409,
+                format!("{new_listen} 无法绑定（端口被占或已有实例在运行）"),
+            ));
+        }
+    }
+
+    // storage 预检：目录能创建（权限/路径错误当场拒绝）。重启后数据目录建
+    // 不出来会导致新进程起不来，而旧进程已退出——必须在写盘前拦住。
+    if storage_changed {
+        for (name, dir) in [
+            ("数据目录", &new_storage.data_root),
+            ("应用目录", &new_storage.apps_dir),
+        ] {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                return Err(ApiError::new(
+                    code::INVALID_REQUEST,
+                    409,
+                    format!("{name} {} 无法创建: {e}", dir.display()),
+                ));
+            }
+        }
+    }
+
+    // limits 预校验：新默认值必须对所有已注册应用合法（清单只能收紧）。
+    // 任一应用不合法 → 409 且不写盘、不改内存，保证「要么全成功，要么原样」。
+    if limits_changed {
+        let apps_dir = current.storage.apps_dir.clone();
+        let ids: Vec<String> = state
+            .apps
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .list()
+            .iter()
+            .map(|m| m.id.clone())
+            .collect();
+        let mut invalid: Vec<String> = Vec::new();
+        for id in ids {
+            if let Err(e) = pegboard_core::app::load_candidate(&apps_dir, &id, &new_limits) {
+                tracing::warn!(error = %e, app_id = %id, "新限额对该应用不合法");
+                invalid.push(id);
+            }
+        }
+        if !invalid.is_empty() {
+            return Err(ApiError::new(
+                code::INVALID_REQUEST,
+                409,
+                format!(
+                    "新限额对以下应用不合法（清单只能收紧）: {}",
+                    invalid.join(", ")
+                ),
+            ));
+        }
+    }
+
+    // 写回配置文件：toml_edit 文档级编辑（保留注释与既有排版），tmp + rename 原子替换。
+    // 注意不能用 toml::Value::to_string()——它把顶层表序列化成一行内联表，不是合法 TOML 文档。
+    let text = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| ApiError::internal(format!("现有配置文件不是合法 TOML，请先手工修复: {e}")))?;
+    doc["server"]["listen"] = toml_edit::value(new_listen.to_string());
+    doc["limits"]["kv_value_bytes"] = toml_edit::value(new_limits.kv_value_bytes as i64);
+    doc["limits"]["kv_total_bytes"] = toml_edit::value(new_limits.kv_total_bytes as i64);
+    doc["limits"]["file_bytes"] = toml_edit::value(new_limits.file_bytes as i64);
+    doc["limits"]["file_total_bytes"] = toml_edit::value(new_limits.file_total_bytes as i64);
+    doc["limits"]["net_rps"] = toml_edit::value(new_limits.net_rps as i64);
+    doc["limits"]["sign_ttl_max"] = toml_edit::value(new_limits.sign_ttl_max as i64);
+    if storage_changed {
+        doc["storage"]["data_root"] = toml_edit::value(new_storage.data_root.display().to_string());
+        doc["storage"]["apps_dir"] = toml_edit::value(new_storage.apps_dir.display().to_string());
+    }
+    let staged = cfg_path.with_extension("toml.tmp");
+    std::fs::write(&staged, doc.to_string())
+        .map_err(|e| ApiError::internal(format!("写配置失败: {e}")))?;
+    std::fs::rename(&staged, &cfg_path)
+        .map_err(|e| ApiError::internal(format!("替换配置失败: {e}")))?;
+
+    let mut applied = Vec::new();
+    let mut restart_required = false;
+
+    // limits 热生效：换快照 + 逐应用重载（生效限额 = 新默认收紧清单）
+    if limits_changed {
+        let apps_dir = current.storage.apps_dir.clone();
+        let mut reload_failed: Vec<String> = Vec::new();
+        {
+            let mut registry = state.apps.write().unwrap_or_else(|p| p.into_inner());
+            let ids: Vec<String> = registry.list().iter().map(|m| m.id.clone()).collect();
+            for id in ids {
+                if let Err(e) = registry.reload_one(&apps_dir, &id, &new_limits) {
+                    tracing::error!(error = %e, app_id = %id, "limits 热重载失败");
+                    reload_failed.push(id);
+                }
+            }
+        }
+        if !reload_failed.is_empty() {
+            // 预校验已过，理论不可达；兜底报错（文件与内存可能短暂不一致，重启可收敛）
+            return Err(ApiError::new(
+                code::UPSTREAM_ERROR,
+                500,
+                format!("限额已写入但部分应用重载失败: {}", reload_failed.join(", ")),
+            ));
+        }
+        applied.push("limits");
+    }
+
+    // 统一换快照（listen 变更虽需重启，快照也让 GET 端点反映期望值）
+    if listen_changed || limits_changed {
+        let mut next = (*current).clone();
+        next.server.listen = new_listen;
+        next.limits = new_limits;
+        *state.config.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(next);
+    }
+    if listen_changed {
+        applied.push("listen");
+        restart_required = true;
+    }
+    // storage 不换内存快照：目录随进程启动打开，运行中无法切换；只落盘，
+    // GET 仍反映当前生效值，重启后生效。
+    if storage_changed {
+        applied.push("storage");
+        restart_required = true;
+    }
+
+    tracing::info!(?applied, restart_required, "config updated via admin");
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "applied": applied,
+            "restart_required": restart_required,
+        })),
+    )
+        .into_response())
+}
+
 /// 重启宿主进程（在线升级落位后 / 配置生效）。spawn 由进程层实现，
 /// 成功响应后本进程将优雅退出；失败（如 spawn 被拒）保持存活并返回 500。
 async fn host_restart(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
@@ -635,7 +862,7 @@ async fn install_package(
 ) -> Result<Response, ApiError> {
     // 1. 流式接收 zip 到暂存（压缩体上限内即断）
     let staged = state
-        .config
+        .config()
         .storage
         .data_root
         .join("tmp")
@@ -727,7 +954,7 @@ fn process_package(state: &Arc<AppState>, staged: &std::path::Path) -> Result<St
     pegboard_core::app::validate_id(&manifest.id).map_err(ApiError::from)?;
 
     // 冲突：目录 / 注册表 / 注册行 任一存在即拒绝
-    let apps_dir = &state.config.storage.apps_dir;
+    let apps_dir = &state.config().storage.apps_dir;
     let registered = {
         let registry = state
             .apps
@@ -749,7 +976,7 @@ fn process_package(state: &Arc<AppState>, staged: &std::path::Path) -> Result<St
 
     // 解压到暂存目录（与 apps 同盘 rename 失败时回退复制）
     let staging = state
-        .config
+        .config()
         .storage
         .data_root
         .join("tmp")
@@ -829,8 +1056,9 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
 
 /// 安装公共尾部：校验注册 + 落库 + 审计 + 详情。
 async fn install_app_inner(state: &Arc<AppState>, id: &str) -> Result<Response, ApiError> {
-    let apps_dir = state.config.storage.apps_dir.clone();
-    let limits = state.config.limits;
+    let cfg = state.config();
+    let apps_dir = cfg.storage.apps_dir.clone();
+    let limits = cfg.limits;
     let state2 = Arc::clone(state);
     let id2 = id.to_owned();
     let result = tokio::task::spawn_blocking(move || {

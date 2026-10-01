@@ -49,13 +49,9 @@ async fn serve_app_bare(
     serve_impl(&state, &app_id, "", method, headers).await
 }
 
-/// 固定身份模式下的 subject（注入页面供 host.user 使用）。
-fn fixed_subject(state: &Arc<AppState>) -> Option<String> {
-    use pegboard_core::config::IdentityConfig;
-    match &state.config.identity {
-        IdentityConfig::Fixed { subject } => subject.clone(),
-        _ => None,
-    }
+/// 固定 subject（注入页面供 host.user 使用）。身份不再是配置项，恒为内部值。
+fn fixed_subject() -> Option<String> {
+    Some(pegboard_core::identity::LOCAL_SUBJECT.to_owned())
 }
 
 async fn serve_impl(
@@ -69,7 +65,7 @@ async fn serve_impl(
         Ok(app) => app,
         Err(e) => return e.into_response(),
     };
-    let subject = fixed_subject(state).clone();
+    let subject = fixed_subject();
     // 目标相对路径：空路径用 entry；目录路径补 index.html
     let rel: String = if path.is_empty() {
         app.manifest.entry.trim_start_matches("./").to_owned()
@@ -489,7 +485,7 @@ mod tests {
         )
         .expect("proxy");
         let state = Arc::new(AppState {
-            identity: pegboard_core::identity::Identity::new(&config.identity),
+            identity: pegboard_core::identity::Identity::new(),
             guard: Arc::new(pegboard_core::guard::Guard::new()),
             stores: pegboard_core::store::StoreManager::new(
                 root.path().join("data/apps_data"),
@@ -502,14 +498,14 @@ mod tests {
             signer: Arc::clone(&signer),
             host_db: Arc::clone(&host_db),
             started: std::time::Instant::now(),
-            admin_token: None,
             disabled: std::sync::RwLock::new(std::collections::HashSet::new()),
             proxy: Arc::new(proxy),
-            config,
+            config: std::sync::RwLock::new(Arc::new(config)),
+            config_path: None,
             apps: std::sync::RwLock::new(outcome.registry),
             auditor,
             control: Arc::new(crate::host::NoControl),
-            update: Arc::new(crate::host::update::Updater::new("", std::env::temp_dir())),
+            update: Arc::new(crate::host::update::Updater::new(std::env::temp_dir())),
         });
         TestEnv { _root: root, state }
     }

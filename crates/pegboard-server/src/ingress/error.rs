@@ -19,6 +19,7 @@ pub mod code {
     pub const NOT_FOUND: &str = "NOT_FOUND";
     pub const INVALID_REQUEST: &str = "INVALID_REQUEST";
     pub const TOKEN_INVALID: &str = "TOKEN_INVALID";
+    pub const INTERNAL: &str = "INTERNAL";
     pub const UPSTREAM_ERROR: &str = "UPSTREAM_ERROR";
     pub const TIMEOUT: &str = "TIMEOUT";
 }
@@ -57,6 +58,10 @@ impl ApiError {
 
     pub fn invalid_request(message: impl Into<String>) -> Self {
         Self::new(code::INVALID_REQUEST, 400, message)
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(code::INTERNAL, 500, message)
     }
 
     fn status_code(&self) -> StatusCode {

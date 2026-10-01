@@ -52,6 +52,17 @@ impl HostDb {
                created_at INTEGER NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_tokens_expires ON signed_tokens(expires_at);
+             CREATE TABLE IF NOT EXISTS admin_auth (
+               id           INTEGER PRIMARY KEY CHECK (id = 1),
+               password_hash TEXT NOT NULL,
+               updated_at   INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS admin_sessions (
+               token_hash TEXT PRIMARY KEY,
+               expires_at INTEGER NOT NULL,
+               created_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at);
              CREATE TABLE IF NOT EXISTS schema_migrations (
                version    INTEGER PRIMARY KEY,
                applied_at INTEGER NOT NULL
@@ -168,6 +179,82 @@ impl HostDb {
         conn.execute("DELETE FROM apps WHERE id = ?1", [id])?;
         Ok(())
     }
+
+    // ===== 管理访问密码与会话（明文密码 / 明文 token 均不落库） =====
+
+    /// 当前管理密码哈希（None = 未设置）。
+    pub fn get_password_hash(&self) -> Result<Option<String>, HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let mut stmt = conn.prepare("SELECT password_hash FROM admin_auth WHERE id = 1")?;
+        let mut rows = stmt.query([])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 设置（或修改）管理密码哈希；单行表，幂等 upsert。
+    pub fn set_password_hash(&self, password_hash: &str) -> Result<(), HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        conn.execute(
+            "INSERT INTO admin_auth(id, password_hash, updated_at) VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET password_hash = ?1, updated_at = ?2",
+            rusqlite::params![password_hash, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// 登记会话（token 哈希）。
+    pub fn insert_session(&self, token_hash: &str, expires_at: i64) -> Result<(), HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        conn.execute(
+            "INSERT INTO admin_sessions(token_hash, expires_at, created_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![token_hash, expires_at, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// 按会话 token 哈希查找；存在且未过期才返回 Some(expires_at)。
+    pub fn lookup_session(&self, token_hash: &str) -> Result<Option<i64>, HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let mut stmt =
+            conn.prepare("SELECT expires_at FROM admin_sessions WHERE token_hash = ?1")?;
+        let mut rows = stmt.query([token_hash])?;
+        match rows.next()? {
+            Some(row) => {
+                let expires_at: i64 = row.get(0)?;
+                Ok((expires_at > now_ms()).then_some(expires_at))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// 注销会话。
+    pub fn delete_session(&self, token_hash: &str) -> Result<(), HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        conn.execute(
+            "DELETE FROM admin_sessions WHERE token_hash = ?1",
+            [token_hash],
+        )?;
+        Ok(())
+    }
+
+    /// 改密后吊销全部会话。
+    pub fn delete_all_sessions(&self) -> Result<u64, HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let n = conn.execute("DELETE FROM admin_sessions", [])?;
+        Ok(n as u64)
+    }
+
+    /// 清理过期会话，返回删除数。
+    pub fn gc_sessions(&self) -> Result<u64, HostDbError> {
+        let conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let n = conn.execute(
+            "DELETE FROM admin_sessions WHERE expires_at <= ?1",
+            [now_ms()],
+        )?;
+        Ok(n as u64)
+    }
 }
 
 fn now_ms() -> i64 {
@@ -230,5 +317,44 @@ mod tests {
         assert_eq!(db.app_states().unwrap().get("a").map(|s| s.0), Some(false));
         db.remove_app("a").unwrap();
         assert!(!db.app_states().unwrap().contains_key("a"));
+    }
+
+    #[test]
+    fn password_hash_upsert() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = HostDb::open(&dir.path().join("host.db")).unwrap();
+        assert!(db.get_password_hash().unwrap().is_none());
+        db.set_password_hash("hash-a").unwrap();
+        assert_eq!(db.get_password_hash().unwrap().as_deref(), Some("hash-a"));
+        db.set_password_hash("hash-b").unwrap();
+        assert_eq!(db.get_password_hash().unwrap().as_deref(), Some("hash-b"));
+    }
+
+    #[test]
+    fn session_lifecycle() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = HostDb::open(&dir.path().join("host.db")).unwrap();
+        assert!(db.lookup_session("s1").unwrap().is_none());
+        db.insert_session("s1", now_ms() + 60_000).unwrap();
+        assert!(db.lookup_session("s1").unwrap().is_some());
+        // 过期会话不可见
+        db.insert_session("s2", now_ms() - 1).unwrap();
+        assert!(db.lookup_session("s2").unwrap().is_none());
+        // 注销单个 / gc 过期
+        db.delete_session("s1").unwrap();
+        assert!(db.lookup_session("s1").unwrap().is_none());
+        assert_eq!(db.gc_sessions().unwrap(), 1);
+        assert!(db.lookup_session("s2").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_all_sessions_revokes_everything() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = HostDb::open(&dir.path().join("host.db")).unwrap();
+        db.insert_session("s1", now_ms() + 60_000).unwrap();
+        db.insert_session("s2", now_ms() + 60_000).unwrap();
+        assert_eq!(db.delete_all_sessions().unwrap(), 2);
+        assert!(db.lookup_session("s1").unwrap().is_none());
+        assert!(db.lookup_session("s2").unwrap().is_none());
     }
 }

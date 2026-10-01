@@ -79,7 +79,7 @@ async fn upload(
 
         // 暂存路径：data_root/tmp/<ulid>.part（与 apps_data 同盘，rename 原子）
         let staged = state
-            .config
+            .config()
             .storage
             .data_root
             .join("tmp")

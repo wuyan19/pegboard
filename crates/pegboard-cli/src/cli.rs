@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use pegboard_core::app::AppRegistry;
-use pegboard_core::config::{Config, IdentityConfig, Mode};
+use pegboard_core::config::Config;
 use pegboard_server::host::ProcessControl;
 use tokio::sync::Notify;
 
@@ -88,20 +88,24 @@ pub fn run(has_tty: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
         data_root = %config.storage.data_root.display(),
         "serve starting"
     );
-    serve(config, args.no_tray)
+    serve(config, resolved.config_path, args.no_tray)
 }
 
 /// serve 编排：无头模式在本线程建 tokio runtime 直跑；托盘模式主线程让给
 /// tao 事件循环，服务跑子线程（tray 模块）。托盘初始化失败（无 GUI 会话）
 /// 降级为无头模式，服务可用性不受影响。
-fn serve(config: Config, no_tray: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
+fn serve(
+    config: Config,
+    config_path: Option<PathBuf>,
+    no_tray: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
     if no_tray || !tray_available() {
-        serve_headless(config)?;
+        serve_headless(config, config_path)?;
         return Ok(ExitCode::SUCCESS);
     }
-    let fallback = config.clone();
+    let fallback = (config.clone(), config_path.clone());
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        crate::tray::serve_with_tray(config)
+        crate::tray::serve_with_tray(config, config_path)
     })) {
         Ok(result) => {
             result?;
@@ -109,7 +113,7 @@ fn serve(config: Config, no_tray: bool) -> Result<ExitCode, Box<dyn std::error::
         }
         Err(_) => {
             tracing::error!("托盘初始化失败（无 GUI 会话？），降级为无头服务模式");
-            serve_headless(fallback)?;
+            serve_headless(fallback.0, fallback.1)?;
             Ok(ExitCode::SUCCESS)
         }
     }
@@ -131,7 +135,10 @@ fn tray_available() -> bool {
 }
 
 /// 无头服务：本线程 tokio runtime，信号 / 进程控制双路优雅关闭。
-fn serve_headless(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+fn serve_headless(
+    config: Config,
+    config_path: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let notify = Arc::new(Notify::new());
     let stopped = Arc::new(AtomicBool::new(false));
     let control: Arc<dyn ProcessControl> = Arc::new(HeadlessControl::new(Arc::clone(&notify)));
@@ -140,7 +147,7 @@ fn serve_headless(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .map_err(|e| format!("tokio runtime 初始化失败: {e}"))?;
     rt.block_on(async move {
-        let runtime = crate::runtime::build(config, control).await?;
+        let runtime = crate::runtime::build(config, config_path, control).await?;
         crate::runtime::serve(runtime, Some(notify), Some(stopped)).await
     })?;
     Ok(())
@@ -407,21 +414,8 @@ fn apply_overrides(args: &Args, config: &mut Config) {
     }
 }
 
-/// 配置类告警（不算错误）：Lan 模式 + 空 token 表。
-fn advisory_warnings(config: &Config) -> Vec<String> {
-    let mut out = Vec::new();
-    if config.server.mode == Mode::Lan {
-        if let IdentityConfig::Tokens { tokens } = &config.identity {
-            if tokens.is_empty() {
-                out.push("mode=lan 且 identity tokens 为空：所有请求都将是匿名".to_owned());
-            }
-        }
-    }
-    out
-}
-
 /// 自检：加载配置、扫描应用、校验清单；不绑定端口、不写数据。
-/// 退出码：0 全通过；1 有错误；2 有告警但无错误。
+/// 退出码：0 全通过；1 有错误。
 fn check_mode(config: &Config) -> ExitCode {
     let outcome = match AppRegistry::scan(&config.storage.apps_dir, &config.limits) {
         Ok(outcome) => outcome,
@@ -441,15 +435,9 @@ fn check_mode(config: &Config) -> ExitCode {
     for warning in &outcome.warnings {
         tracing::error!(error = %warning, "app invalid");
     }
-    let advisories = advisory_warnings(config);
-    for advisory in &advisories {
-        tracing::warn!(advisory = %advisory, "config advisory");
-    }
-    if !outcome.warnings.is_empty() {
-        ExitCode::from(1)
-    } else if !advisories.is_empty() {
-        ExitCode::from(2)
-    } else {
+    if outcome.warnings.is_empty() {
         ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }

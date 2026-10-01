@@ -1,89 +1,44 @@
-//! 配置加载与校验。加载后只读，不做运行时热更新。
+//! 配置加载与校验。加载后只读；admin 页可在线修改 listen/limits（写回文件）。
 //!
 //! 来源优先级：默认 → 文件 → 环境变量（`PEGBOARD_` 前缀，`__` 分层）→ 命令行覆盖。
 //! 命令行覆盖由 CLI 装配层应用到 `Config` 字段后重新 `validate`。
+//!
+//! 访问语义：listen 绑环回 = 仅本机；绑非环回 = 局域网开放（是否需要访问密码
+//! 由 host.db 里的管理密码决定，不在此配置）。身份 subject 固定为内部值，
+//! 不再是用户配置。
 
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// 只读配置，加载后不再变更。
+/// 只读配置，加载后不再变更（admin 在线修改经运行时快照替换）。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub server: ServerConfig,
-    pub identity: IdentityConfig,
     pub limits: Limits,
     pub storage: StorageConfig,
-    pub update: UpdateConfig,
-}
-
-/// 在线升级配置。manifest_url 为空 = 更新通道关闭（v1 默认）；
-/// 内容真实性由编译期内嵌公钥的 minisign 验签保证，URL 只决定去哪取。
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct UpdateConfig {
-    pub manifest_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
     pub listen: SocketAddr,
-    pub mode: Mode,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen: SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 8787),
-            mode: Mode::Local,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    /// 仅本机访问。
-    Local,
-    /// 内网访问，需身份来源。
-    Lan,
-}
-
-/// 身份来源。v1 部署锁定 fixed 模式，其余为后置能力。
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum IdentityConfig {
-    /// 固定 subject，可为 None。
-    Fixed {
-        #[serde(default)]
-        subject: Option<String>,
-    },
-    /// 信任来自指定代理 IP 的 X-Forwarded-User。
-    Forwarded { trusted: Vec<IpAddr> },
-    /// 手工 token → subject。
-    Tokens {
-        #[serde(default)]
-        tokens: HashMap<String, String>,
-    },
-}
-
-impl Default for IdentityConfig {
-    fn default() -> Self {
-        Self::Fixed { subject: None }
-    }
-}
-
-impl IdentityConfig {
-    /// 出站代理需剥离的身份注入头，与身份配置同清单。
-    pub fn injected_headers(&self) -> Vec<&'static str> {
-        match self {
-            Self::Forwarded { .. } => vec!["x-forwarded-user"],
-            _ => Vec::new(),
-        }
+impl ServerConfig {
+    /// listen 是否把服务暴露到本机之外（非环回地址）。
+    pub fn is_lan_exposed(&self) -> bool {
+        !self.listen.ip().is_loopback()
     }
 }
 
@@ -113,7 +68,7 @@ impl Default for Limits {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
     /// 数据根：apps_data/、logs/、tmp/、host.db 的父目录。
@@ -157,22 +112,8 @@ pub fn load(path: Option<&Path>) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-/// 校验：模式与身份来源匹配、限额自洽。
-fn validate(cfg: &Config) -> Result<(), ConfigError> {
-    if cfg.server.mode == Mode::Lan {
-        if let IdentityConfig::Fixed { subject: None } = cfg.identity {
-            return Err(ConfigError::Invalid(
-                "mode=lan 需要非匿名身份来源（fixed.subject / forwarded / tokens）".into(),
-            ));
-        }
-    }
-    if let IdentityConfig::Forwarded { trusted } = &cfg.identity {
-        if trusted.is_empty() {
-            return Err(ConfigError::Invalid(
-                "identity.kind=forwarded 需要 non-empty trusted".into(),
-            ));
-        }
-    }
+/// 校验：限额自洽。
+pub fn validate(cfg: &Config) -> Result<(), ConfigError> {
     let l = &cfg.limits;
     for (name, v) in [
         ("kv_value_bytes", l.kv_value_bytes),
@@ -282,12 +223,6 @@ mod tests {
         let text = r#"
 [server]
 listen = "127.0.0.1:9000"
-mode = "lan"
-
-[identity]
-kind = "tokens"
-[identity.tokens]
-abc = "alice"
 
 [storage]
 data_root = "./d1"
@@ -295,8 +230,6 @@ apps_dir = "./a1"
 "#;
         let cfg = load_from_str(text);
         assert_eq!(cfg.server.listen.port(), 9000);
-        assert_eq!(cfg.server.mode, Mode::Lan);
-        assert!(matches!(cfg.identity, IdentityConfig::Tokens { .. }));
         assert_eq!(cfg.storage.data_root, PathBuf::from("./d1"));
         assert_eq!(cfg.storage.apps_dir, PathBuf::from("./a1"));
         assert_eq!(cfg.limits, Limits::default());
@@ -306,40 +239,36 @@ apps_dir = "./a1"
     fn defaults_when_empty_file() {
         let cfg = load_from_str("");
         assert_eq!(cfg.server.listen.port(), 8787);
-        assert_eq!(cfg.server.mode, Mode::Local);
-        assert!(matches!(
-            cfg.identity,
-            IdentityConfig::Fixed { subject: None }
-        ));
+        assert!(!cfg.server.is_lan_exposed());
     }
 
     #[test]
-    fn lan_requires_identity() {
-        let cfg = load_from_str("[server]\nmode = \"lan\"\n");
-        assert!(matches!(
-            validate(&cfg),
-            Err(ConfigError::Invalid(msg)) if msg.contains("身份")
-        ));
+    fn lan_exposure_derived_from_listen() {
+        let cfg = load_from_str("[server]\nlisten = \"0.0.0.0:8787\"\n");
+        assert!(cfg.server.is_lan_exposed());
+        let cfg = load_from_str("[server]\nlisten = \"192.168.1.5:8787\"\n");
+        assert!(cfg.server.is_lan_exposed());
+        let cfg = load_from_str("[server]\nlisten = \"127.0.0.1:8787\"\n");
+        assert!(!cfg.server.is_lan_exposed());
     }
 
     #[test]
-    fn lan_with_fixed_subject_ok() {
-        let cfg = load_from_str(
-            "[server]\nmode = \"lan\"\n[identity]\nkind = \"fixed\"\nsubject = \"me\"\n",
-        );
-        assert!(validate(&cfg).is_ok());
-    }
+    fn unknown_fields_ignored() {
+        // 旧版本遗留的 [update]、[identity]、mode 键不应导致解析失败
+        let text = r#"
+[server]
+listen = "127.0.0.1:9000"
+mode = "local"
 
-    #[test]
-    fn forwarded_requires_trusted() {
-        let cfg = load_from_str("[identity]\nkind = \"forwarded\"\ntrusted = []\n");
-        assert!(validate(&cfg).is_err());
-    }
+[identity]
+kind = "fixed"
+subject = "x"
 
-    #[test]
-    fn forwarded_with_trusted_ok() {
-        let cfg = load_from_str("[identity]\nkind = \"forwarded\"\ntrusted = [\"10.0.0.1\"]\n");
-        assert!(validate(&cfg).is_ok());
+[update]
+manifest_url = "https://example.com/m.json"
+"#;
+        let cfg = load_from_str(text);
+        assert_eq!(cfg.server.listen.port(), 9000);
     }
 
     #[test]
@@ -358,19 +287,12 @@ apps_dir = "./a1"
     fn env_overrides_file() {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let path = dir.path().join("config.toml");
-        std::fs::write(
-            &path,
-            "[server]\nmode = \"local\"\n[identity]\nkind = \"fixed\"\nsubject = \"x\"\n",
-        )
-        .expect("write config");
+        std::fs::write(&path, "[server]\nlisten = \"127.0.0.1:8787\"\n").expect("write config");
         // 真实键名走完整 load 路径；本测试是唯一设置 PEGBOARD_* 变量的测试
-        std::env::set_var("PEGBOARD_SERVER__MODE", "lan");
         std::env::set_var("PEGBOARD_LIMITS__NET_RPS", "99");
         let cfg = load(Some(&path));
-        std::env::remove_var("PEGBOARD_SERVER__MODE");
         std::env::remove_var("PEGBOARD_LIMITS__NET_RPS");
         let cfg = cfg.expect("load ok");
-        assert_eq!(cfg.server.mode, Mode::Lan);
         assert_eq!(cfg.limits.net_rps, 99);
     }
 

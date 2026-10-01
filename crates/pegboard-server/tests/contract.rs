@@ -47,7 +47,7 @@ fn test_env_with(manifests: &[(&str, &str)]) -> TestEnv {
     )
     .expect("proxy");
     let state = Arc::new(AppState {
-        identity: pegboard_core::identity::Identity::new(&config.identity),
+        identity: pegboard_core::identity::Identity::new(),
         guard: Arc::new(pegboard_core::guard::Guard::new()),
         stores: pegboard_core::store::StoreManager::new(root.path().join("data/apps_data"), limits),
         files: pegboard_core::files::FilesManager::new(
@@ -57,15 +57,14 @@ fn test_env_with(manifests: &[(&str, &str)]) -> TestEnv {
         signer: Arc::clone(&signer),
         host_db: Arc::clone(&host_db),
         started: std::time::Instant::now(),
-        admin_token: None,
         disabled: std::sync::RwLock::new(std::collections::HashSet::new()),
         proxy: Arc::new(proxy),
-        config,
+        config: std::sync::RwLock::new(Arc::new(config)),
+        config_path: None,
         apps: std::sync::RwLock::new(outcome.registry),
         auditor,
         control: Arc::new(pegboard_server::host::NoControl),
         update: Arc::new(pegboard_server::host::update::Updater::new(
-            "",
             std::env::temp_dir(),
         )),
     });

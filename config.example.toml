@@ -4,14 +4,12 @@
 # ~/.config/pegboard、Windows %APPDATA%/Pegboard）→ 全默认。
 # 命中平台配置目录或全默认时，下方相对路径重定基到平台数据区；
 # cwd 配置的相对路径相对 cwd（开发树行为）。
+#
+# listen 绑 127.0.0.1 = 仅本机；绑 0.0.0.0 或局域网 IP = 局域网可达。
+# 局域网开放时建议在管理页设置访问密码（保护 /api/admin/*，应用页面不受影响）。
 
 [server]
 listen = "127.0.0.1:8787"
-mode = "local"
-
-[identity]
-kind = "fixed"
-subject = "local"
 
 [limits]
 kv_value_bytes = 1048576
@@ -24,11 +22,3 @@ sign_ttl_max = 86400
 [storage]
 data_root = "./data"
 apps_dir = "./apps"
-
-# 管理页鉴权（可选）：设置环境变量 PEGBOARD_ADMIN_TOKEN（≥16 字符）后，
-# 全部 /api/admin/* 端点要求 Authorization: Bearer <token>。lan 部署建议配置。
-
-# 在线升级（可选）：更新源 manifest 地址（信封 {payload, signature}，需用
-# update_keygen/update_sign 私钥签名；公钥编译期内嵌）。留空 = 通道关闭。
-# [update]
-# manifest_url = "https://example.com/pegboard/update-manifest.json"

@@ -13,23 +13,44 @@ struct TestEnv {
 }
 
 fn state_with(manifests: &[(&str, &str)]) -> TestEnv {
-    state_with_opts(manifests, None)
+    state_full(manifests, Arc::new(pegboard_server::host::NoControl))
 }
 
-fn state_with_opts(manifests: &[(&str, &str)], admin_token: Option<&str>) -> TestEnv {
-    state_full(
+/// 带配置文件路径的环境（config_path 指向独立临时文件）。
+fn state_with_config(
+    manifests: &[(&str, &str)],
+    config_body: &str,
+) -> (TestEnv, std::path::PathBuf) {
+    let cfg_dir = tempfile::TempDir::new().expect("tempdir");
+    let cfg_path = cfg_dir.path().join("config.toml");
+    std::fs::write(&cfg_path, config_body).expect("write config");
+    let env = state_full_in(
         manifests,
-        admin_token,
         Arc::new(pegboard_server::host::NoControl),
-    )
+        Some(cfg_path.clone()),
+        cfg_dir,
+    );
+    (env, cfg_path)
 }
 
 fn state_full(
     manifests: &[(&str, &str)],
-    admin_token: Option<&str>,
     control: Arc<dyn pegboard_server::host::ProcessControl>,
 ) -> TestEnv {
-    let root = tempfile::TempDir::new().expect("tempdir");
+    state_full_in(
+        manifests,
+        control,
+        None,
+        tempfile::TempDir::new().expect("tempdir"),
+    )
+}
+
+fn state_full_in(
+    manifests: &[(&str, &str)],
+    control: Arc<dyn pegboard_server::host::ProcessControl>,
+    config_path: Option<std::path::PathBuf>,
+    root: tempfile::TempDir,
+) -> TestEnv {
     let apps = root.path().join("apps");
     std::fs::create_dir_all(&apps).expect("mkdir apps");
     for (id, manifest) in manifests {
@@ -98,7 +119,7 @@ fn state_full(
     )
     .expect("proxy");
     let state = Arc::new(AppState {
-        identity: pegboard_core::identity::Identity::new(&config.identity),
+        identity: pegboard_core::identity::Identity::new(),
         guard: Arc::new(pegboard_core::guard::Guard::new()),
         stores: pegboard_core::store::StoreManager::new(root.path().join("data/apps_data"), limits),
         files: pegboard_core::files::FilesManager::new(
@@ -108,15 +129,14 @@ fn state_full(
         signer: Arc::clone(&signer),
         host_db: Arc::clone(&host_db),
         started: std::time::Instant::now(),
-        admin_token: admin_token.map(str::to_owned),
         disabled: std::sync::RwLock::new(std::collections::HashSet::new()),
         proxy: Arc::new(proxy),
-        config,
+        config: std::sync::RwLock::new(Arc::new(config)),
+        config_path,
         apps: std::sync::RwLock::new(outcome.registry),
         auditor: handle,
         control,
         update: Arc::new(pegboard_server::host::update::Updater::new(
-            "",
             std::env::temp_dir(),
         )),
     });
@@ -155,6 +175,40 @@ async fn body_json(response: axum::http::Response<Body>) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("json")
 }
 
+/// 带 JSON 体的请求（可选 Cookie 头）。
+async fn call_json(
+    env: &TestEnv,
+    method: Method,
+    uri: &str,
+    body: serde_json::Value,
+    cookie: Option<&str>,
+) -> axum::http::Response<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(c) = cookie {
+        builder = builder.header("cookie", c);
+    }
+    build_router(Arc::clone(&env.state))
+        .oneshot(builder.body(Body::from(body.to_string())).expect("request"))
+        .await
+        .expect("oneshot")
+}
+
+/// 从 Set-Cookie 响应头取会话 cookie 值。
+fn session_cookie_of(r: &axum::http::Response<Body>) -> Option<String> {
+    r.headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            v.split(';')
+                .next()
+                .filter(|kv| kv.starts_with("pegboard_session=") && !kv.ends_with("="))
+                .map(str::to_owned)
+        })
+}
+
 /// 记录重启调用的控制实现（共享标志供断言）。
 struct RecordingControl {
     called: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -173,7 +227,6 @@ async fn host_restart_invokes_process_control() {
     let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let env = state_full(
         &[],
-        None,
         Arc::new(RecordingControl {
             called: Arc::clone(&called),
         }),
@@ -567,8 +620,7 @@ async fn status_endpoint() {
     assert_eq!(r.status(), StatusCode::OK);
     let v = body_json(r).await;
     assert!(v["version"].as_str().is_some_and(|s| !s.is_empty()));
-    assert_eq!(v["mode"], "local");
-    assert_eq!(v["identity"], "fixed");
+    assert_eq!(v["exposure"], "local");
     assert!(v["listen"].as_str().is_some_and(|s| s.contains(':')));
     assert!(v["uptime_secs"].is_u64());
     assert_eq!(v["audit_dropped"], 0);
@@ -722,7 +774,7 @@ async fn admin_page_served() {
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("text/html")));
-    let bytes = axum::body::to_bytes(r.into_body(), 64 * 1024)
+    let bytes = axum::body::to_bytes(r.into_body(), 256 * 1024)
         .await
         .expect("body");
     let text = String::from_utf8_lossy(&bytes);
@@ -738,56 +790,455 @@ async fn admin_spa_fallback_and_asset_404() {
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
 }
 
-// ---------- 批次三：管理鉴权 + zip 包安装 ----------
-
-fn env_with_token() -> TestEnv {
-    state_with_opts(
-        &[(
-            "a",
-            r#"{"id":"a","name":"A","entry":"index.html","permissions":{"store":true}}"#,
-        )],
-        Some("test-admin-token-123456"),
-    )
-}
+// ---------- 批次三：管理鉴权（访问密码）+ zip 包安装 ----------
 
 #[tokio::test]
-async fn admin_auth_required_when_token_set() {
-    let env = env_with_token();
-    // 无凭证 → 401 TOKEN_INVALID
-    let r = call(&env, Method::GET, "/api/admin/apps").await;
-    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
-    let v = body_json(r).await;
-    assert_eq!(v["error"]["code"], "TOKEN_INVALID");
-    // 错误凭证 → 401
-    let req = Request::get("/api/admin/apps")
-        .header("authorization", "Bearer wrong-token-wrong-token")
-        .body(Body::empty())
-        .expect("request");
-    let r = build_router(Arc::clone(&env.state))
-        .oneshot(req)
-        .await
-        .expect("oneshot");
-    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
-    // 正确凭证 → 200
-    let req = Request::get("/api/admin/apps")
-        .header("authorization", "Bearer test-admin-token-123456")
-        .body(Body::empty())
-        .expect("request");
-    let r = build_router(Arc::clone(&env.state))
-        .oneshot(req)
-        .await
-        .expect("oneshot");
-    assert_eq!(r.status(), StatusCode::OK);
-    // 管理页外壳不受鉴权保护（无敏感数据）
-    let r = call(&env, Method::GET, "/admin").await;
-    assert_eq!(r.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn admin_auth_off_when_no_token() {
+async fn admin_auth_off_when_no_password() {
+    // 未设访问密码：全部 admin 端点放行（对应环回部署默认态）
     let env = env();
     let r = call(&env, Method::GET, "/api/admin/apps").await;
     assert_eq!(r.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn password_setup_login_logout_flow() {
+    let env = env();
+
+    // 初始状态：未设密码
+    let r = call(&env, Method::GET, "/api/admin/auth/state").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let v = body_json(r).await;
+    assert_eq!(v["has_password"], false);
+
+    // 未设密码时 admin 端点放行
+    let r = call(&env, Method::GET, "/api/admin/apps").await;
+    assert_eq!(r.status(), StatusCode::OK);
+
+    // 首次 setup：下发会话 cookie
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/setup",
+        serde_json::json!({"password": "s3cret-password"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK, "{}", body_json(r).await);
+    let cookie = session_cookie_of(&r).expect("setup 应下发会话 cookie");
+
+    // 带 cookie 的请求放行；重复 setup → 409
+    let r = call_json(
+        &env,
+        Method::GET,
+        "/api/admin/apps",
+        serde_json::json!({}),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/setup",
+        serde_json::json!({"password": "another-pass-1"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+
+    // 无 cookie / 错误 cookie → 401
+    let r = call(&env, Method::GET, "/api/admin/apps").await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let r = call_json(
+        &env,
+        Method::GET,
+        "/api/admin/apps",
+        serde_json::json!({}),
+        Some("pegboard_session=deadbeef"),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+
+    // 登录：错误密码 401；正确密码 200 + 新 cookie
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/login",
+        serde_json::json!({"password": "wrong-password"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/login",
+        serde_json::json!({"password": "s3cret-password"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let cookie2 = session_cookie_of(&r).expect("login 应下发会话 cookie");
+
+    // logout 后会话失效
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/logout",
+        serde_json::json!({}),
+        Some(&cookie2),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = call_json(
+        &env,
+        Method::GET,
+        "/api/admin/apps",
+        serde_json::json!({}),
+        Some(&cookie2),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let _ = cookie; // 第一个会话仍有效，logout 只注销自身
+}
+
+#[tokio::test]
+async fn password_change_revokes_old_sessions() {
+    let env = env();
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/setup",
+        serde_json::json!({"password": "first-password"}),
+        None,
+    )
+    .await;
+    let old_cookie = session_cookie_of(&r).expect("cookie");
+
+    // 旧密码错误 → 401
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/change",
+        serde_json::json!({"old": "wrong-old-pass", "new": "second-password"}),
+        Some(&old_cookie),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+
+    // 改密成功 → 新 cookie 有效、旧 cookie 全部吊销
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/change",
+        serde_json::json!({"old": "first-password", "new": "second-password"}),
+        Some(&old_cookie),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let new_cookie = session_cookie_of(&r).expect("new cookie");
+    let r = call_json(
+        &env,
+        Method::GET,
+        "/api/admin/apps",
+        serde_json::json!({}),
+        Some(&new_cookie),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = call_json(
+        &env,
+        Method::GET,
+        "/api/admin/apps",
+        serde_json::json!({}),
+        Some(&old_cookie),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+
+    // 新密码可登录，旧密码不可
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/login",
+        serde_json::json!({"password": "first-password"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/login",
+        serde_json::json!({"password": "second-password"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn password_too_short_rejected() {
+    let env = env();
+    let r = call_json(
+        &env,
+        Method::POST,
+        "/api/admin/auth/setup",
+        serde_json::json!({"password": "short"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------- 批次四：在线配置 ----------
+
+const MIN_CONFIG: &str =
+    "# 网络配置\n[server]\nlisten = \"127.0.0.1:8787\"\n\n[limits]\nnet_rps = 20\n";
+
+#[tokio::test]
+async fn config_get_and_put_requires_config_file() {
+    // 无配置文件（全默认启动）：GET 标记无文件，PUT 拒绝
+    let env = env();
+    let r = call(&env, Method::GET, "/api/admin/config").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let v = body_json(r).await;
+    assert_eq!(v["has_config_file"], false);
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"limits": {"net_rps": 5}}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn config_put_limits_hot_reload() {
+    let manifests = [(
+        "a",
+        r#"{"id":"a","name":"A","entry":"index.html","permissions":{"store":true},"limits":{"net_rps":10}}"#,
+    )];
+    let (env, cfg_path) = state_with_config(&manifests, MIN_CONFIG);
+
+    // 放宽 host 默认 net_rps 20 → 30；应用清单收紧为 10，生效值仍 10（收紧语义）
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"limits": {"kv_value_bytes": 1048576, "kv_total_bytes": 10485760,
+            "file_bytes": 104857600, "file_total_bytes": 1073741824, "net_rps": 30,
+            "sign_ttl_max": 86400}}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK, "{}", body_json(r).await);
+    let v = body_json(r).await;
+    assert_eq!(v["applied"], serde_json::json!(["limits"]));
+    assert_eq!(v["restart_required"], false);
+
+    // 生效限额已随重载更新（清单收紧值不变）
+    let r = call(&env, Method::GET, "/api/admin/apps/a").await;
+    let v = body_json(r).await;
+    assert_eq!(v["limits"]["net_rps"], 10);
+
+    // 配置文件已落盘且仍是合法 TOML 文档（能被 load 重新加载）；注释保留
+    let text = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(text.contains("net_rps = 30"), "{text}");
+    assert!(text.contains("# 网络配置"), "注释应保留: {text}");
+    let reloaded = pegboard_core::config::load(Some(&cfg_path)).expect("写回的文件必须可重新加载");
+    assert_eq!(reloaded.limits.net_rps, 30);
+}
+
+#[tokio::test]
+async fn config_put_roundtrip_on_minimal_file() {
+    // 极端情况：文件里没有 [server] 段，PUT 后补全并保持合法
+    let manifests = [(
+        "a",
+        r#"{"id":"a","name":"A","entry":"index.html","permissions":{}}"#,
+    )];
+    let (env, cfg_path) = state_with_config(&manifests, "[limits]\nnet_rps = 20\n");
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"listen": "127.0.0.1:0"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK, "{}", body_json(r).await);
+    let reloaded = pegboard_core::config::load(Some(&cfg_path)).expect("写回的文件必须可重新加载");
+    assert_eq!(reloaded.limits.net_rps, 20);
+}
+
+#[tokio::test]
+async fn config_put_limits_tighten_below_manifest_rejected() {
+    // host 默认收到 5 < 应用清单声明的 10：清单越权（只能收紧）→ 重载失败 → 500 回滚报错
+    let manifests = [(
+        "a",
+        r#"{"id":"a","name":"A","entry":"index.html","permissions":{},"limits":{"net_rps":10}}"#,
+    )];
+    let (env, _cfg_path) = state_with_config(&manifests, MIN_CONFIG);
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"limits": {"kv_value_bytes": 1048576, "kv_total_bytes": 10485760,
+            "file_bytes": 104857600, "file_total_bytes": 1073741824, "net_rps": 5,
+            "sign_ttl_max": 86400}}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    // 原限额未变
+    let r = call(&env, Method::GET, "/api/admin/apps/a").await;
+    let v = body_json(r).await;
+    assert_eq!(v["limits"]["net_rps"], 10);
+}
+
+#[tokio::test]
+async fn config_put_listen_preflight_and_gate() {
+    let manifests = [(
+        "a",
+        r#"{"id":"a","name":"A","entry":"index.html","permissions":{}}"#,
+    )];
+    let (env, cfg_path) = state_with_config(&manifests, MIN_CONFIG);
+
+    // 局域网开放 + 未设密码 → 409（不落盘）
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"listen": "0.0.0.0:8788"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let text = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(text.contains("127.0.0.1:8787"), "{text}");
+
+    // 合法变更：环回换端口 → preflight 通过，落盘，标记需重启
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"listen": "127.0.0.1:0"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK, "{}", body_json(r).await);
+    let v = body_json(r).await;
+    assert_eq!(v["restart_required"], true);
+    let text = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(text.contains("listen = \"127.0.0.1:0\""), "{text}");
+
+    // GET 反映期望值（重启前快照即新值）
+    let r = call(&env, Method::GET, "/api/admin/config").await;
+    let v = body_json(r).await;
+    assert_eq!(v["listen"], "127.0.0.1:0");
+}
+
+#[tokio::test]
+async fn config_put_storage_restart_only() {
+    let manifests = [(
+        "a",
+        r#"{"id":"a","name":"A","entry":"index.html","permissions":{}}"#,
+    )];
+    let (env, cfg_path) = state_with_config(&manifests, MIN_CONFIG);
+    let root = env._root.path().to_path_buf();
+
+    // 相对路径拒绝（重定基随启动方式变化，落点不可确定）
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"storage": {"data_root": "./data2", "apps_dir": "./apps2"}}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+
+    // 两个目录相同拒绝
+    let same = root.join("same");
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"storage": {
+            "data_root": same.display().to_string(),
+            "apps_dir": same.display().to_string(),
+        }}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+
+    // 合法变更：落盘 + restart_required + 目录预建
+    let data2 = root.join("data2");
+    let apps2 = root.join("apps2");
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"storage": {
+            "data_root": data2.display().to_string(),
+            "apps_dir": apps2.display().to_string(),
+        }}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::OK, "{}", body_json(r).await);
+    let v = body_json(r).await;
+    assert_eq!(v["applied"], serde_json::json!(["storage"]));
+    assert_eq!(v["restart_required"], true);
+    assert!(data2.is_dir(), "数据目录应已预建");
+    assert!(apps2.is_dir(), "应用目录应已预建");
+
+    // 文件落盘且可重新加载
+    let reloaded = pegboard_core::config::load(Some(&cfg_path)).expect("写回的文件必须可重新加载");
+    assert_eq!(reloaded.storage.data_root, data2);
+    assert_eq!(reloaded.storage.apps_dir, apps2);
+
+    // 运行中快照不变（目录随进程打开，GET 仍是当前生效值）
+    let r = call(&env, Method::GET, "/api/admin/config").await;
+    let v = body_json(r).await;
+    assert_ne!(
+        v["storage"]["data_root"].as_str().unwrap(),
+        data2.display().to_string()
+    );
+}
+
+#[tokio::test]
+async fn config_put_invalid_limits_rejected() {
+    let manifests = [(
+        "a",
+        r#"{"id":"a","name":"A","entry":"index.html","permissions":{}}"#,
+    )];
+    let (env, _cfg) = state_with_config(&manifests, MIN_CONFIG);
+    // net_rps = 0 违反校验
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"limits": {"kv_value_bytes": 1048576, "kv_total_bytes": 10485760,
+            "file_bytes": 104857600, "file_total_bytes": 1073741824, "net_rps": 0,
+            "sign_ttl_max": 86400}}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    // listen 非法
+    let r = call_json(
+        &env,
+        Method::PUT,
+        "/api/admin/config",
+        serde_json::json!({"listen": "not-an-addr"}),
+        None,
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 }
 
 /// 构造 zip 字节（含给定条目）。

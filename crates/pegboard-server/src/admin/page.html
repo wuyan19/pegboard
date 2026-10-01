@@ -226,16 +226,69 @@
   .share { display: inline-block; width: 120px; height: 7px; border-radius: 4px; background: var(--track); overflow: hidden; vertical-align: middle; }
   .share span { display: block; height: 100%; background: var(--accent); }
 
+  /* 配置页字段网格 */
+  .cfg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px 16px; max-width: 880px; margin: 10px 0; }
+  .cfg-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--fg); }
+  .cfg-label { display: flex; justify-content: space-between; align-items: baseline; }
+  .cfg-field .unit { color: var(--faint); font-weight: normal; }
+  .cfg-field input { width: 100%; box-sizing: border-box; }
+  .cfg-sub { color: var(--muted); font-size: 12px; }
+
+  /* 访问密码门 */
+  #auth-gate { position: fixed; inset: 0; background: rgba(6, 8, 15, 0.6); display: flex; align-items: center; justify-content: center; z-index: 60; }
+  #auth-gate[hidden] { display: none; }
+  .auth-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 26px 28px; width: min(360px, 90vw); display: flex; flex-direction: column; gap: 12px; }
+  .auth-card h2 { margin: 0; font-size: 17px; }
+  .auth-card input { padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); font-size: 14px; }
+  .auth-card button { padding: 9px 11px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 14px; cursor: pointer; }
+
+  /* 平板（≤860px）：侧栏折叠为吸顶导航条（滚动中可随时切换视图） */
   @media (max-width: 860px) {
-    body { grid-template-columns: 1fr; }
-    .side { position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px; border-right: none; border-bottom: 1px solid var(--border); padding: 10px 14px; }
-    .brand { padding: 0; }
-    .nav { flex-direction: row; overflow-x: auto; flex: 1; gap: 2px; }
-    .nav a { white-space: nowrap; }
+    /* 单列 grid 下 align-content 默认 stretch 会把剩余高度分给侧栏行，强制顶对齐 */
+    body { grid-template-columns: 1fr; align-content: start; }
+    .side {
+      position: sticky; top: 0; z-index: 30; height: auto;
+      flex-direction: column; gap: 2px;
+      border-right: none; border-bottom: 1px solid var(--border);
+      padding: 10px 14px 0;
+    }
+    .brand { padding: 0 0 6px; }
+    .nav { flex-direction: row; overflow-x: auto; flex: none; gap: 2px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .nav::-webkit-scrollbar { display: none; }
+    .nav a { white-space: nowrap; padding: 8px 12px; border-radius: 7px 7px 0 0; }
     .nav a.active { box-shadow: none; }
-    .side-foot { margin: 0 0 0 auto; padding: 0; border: none; max-width: 46%; }
-    main { padding: 14px 14px 48px; }
+    .side-foot { display: none; }
+    main { padding: 14px 14px 56px; }
     th, td { padding: 8px 10px; }
+  }
+
+  /* 手机（≤600px）：工具条纵向堆叠、卡片单列、网格两列 */
+  @media (max-width: 600px) {
+    main { padding: 12px 12px 56px; }
+    h1 { font-size: 17px; }
+    h2 { margin-top: 20px; }
+    .topbar { gap: 8px; margin-bottom: 8px; }
+    #status { max-width: 55vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* 工具条：输入/下拉占据剩余宽度自然换行；长说明独占一行 */
+    .bar { gap: 6px; }
+    .bar input:not([type="file"]), .bar select { flex: 1 1 130px; min-width: 0; width: auto; }
+    .bar button { flex: 0 0 auto; }
+    /* 长说明（aria-live 状态文案）独占一行；短连接词（如「或」）保持内联 */
+    .bar .muted[aria-live] { flex-basis: 100%; }
+    .bar input[type="search"] { flex-basis: 100%; }
+
+    .wall-grid { grid-template-columns: 1fr; gap: 10px; }
+    .cfg-grid { grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+    .hot-grid { grid-template-columns: 1fr; }
+    .empty { padding: 26px 14px; }
+
+    .app-head { align-items: flex-start; }
+    .usage-bar { width: 110px; }
+    .kv-table td:first-child { width: 92px; }
+    .auth-card { padding: 20px; }
+    .table-wrap { border-radius: 8px; }
+    .error-box { padding: 10px 12px; }
   }
 </style>
 </head>
@@ -250,6 +303,7 @@
     <a href="#/trust">信任中心</a>
     <a href="#/storage">存储</a>
     <a href="#/audit">审计</a>
+    <a href="#/config">配置</a>
     <a href="#/system">系统</a>
   </nav>
   <div class="side-foot"><span id="server-info"></span></div>
@@ -291,7 +345,6 @@
     </div>
     <div id="apps">
       <div id="apps-body" class="wall-grid"><div class="muted">加载中…</div></div>
-      <p class="hint">点击卡片查看详情 · 禁用后能力 API 返回 APP_NOT_FOUND，静态页面仍可访问 · 卸载保留产物与数据（重装即恢复），删除不可逆。</p>
     </div>
   </section>
 
@@ -389,11 +442,74 @@
     <p class="hint">能力调用与 Admin 操作事件（静态访问不入审计）· 过滤条件写入地址栏，可分享。</p>
   </section>
 
+  <!-- 配置 -->
+  <section id="view-config" class="view" hidden>
+    <h2>网络</h2>
+    <div class="cfg-grid">
+      <label class="cfg-field">监听地址
+        <input id="cfg-listen" autocapitalize="none" spellcheck="false"
+               placeholder="127.0.0.1:8787">
+        <span class="cfg-sub" id="cfg-exposure"></span>
+      </label>
+    </div>
+    <p class="hint">绑 127.0.0.1 = 仅本机可访问；绑 0.0.0.0 或局域网 IP = 局域网可达（开放前需先在系统页设置访问密码）。修改需重启生效。</p>
+    <h2>限额 <span class="count">应用的默认上限，应用清单只能收紧</span></h2>
+    <div class="cfg-grid" id="cfg-limits">
+      <label class="cfg-field"><span class="cfg-label">KV 单值上限 <span class="unit">MiB</span></span>
+        <input id="cfg-kv-value" type="number" min="1" step="any">
+      </label>
+      <label class="cfg-field"><span class="cfg-label">KV 总容量 <span class="unit">MiB</span></span>
+        <input id="cfg-kv-total" type="number" min="1" step="any">
+      </label>
+      <label class="cfg-field"><span class="cfg-label">单文件上限 <span class="unit">MiB</span></span>
+        <input id="cfg-file-bytes" type="number" min="1" step="any">
+      </label>
+      <label class="cfg-field"><span class="cfg-label">文件总配额 <span class="unit">GiB</span></span>
+        <input id="cfg-file-total" type="number" min="1" step="any">
+      </label>
+      <label class="cfg-field"><span class="cfg-label">外网请求限速 <span class="unit">次/秒</span></span>
+        <input id="cfg-net-rps" type="number" min="1">
+      </label>
+      <label class="cfg-field"><span class="cfg-label">签名链接有效期 <span class="unit">秒</span></span>
+        <input id="cfg-sign-ttl" type="number" min="1">
+      </label>
+    </div>
+    <p class="hint" id="cfg-bytes-hint"></p>
+    <p class="hint">限额保存后立即生效（逐应用重载）；若某应用的清单声明超出新默认值会整体拒绝并提示。</p>
+    <h2>存储</h2>
+    <div class="cfg-grid" id="cfg-storage-grid">
+      <label class="cfg-field">数据目录
+        <input id="cfg-data-root" autocapitalize="none" spellcheck="false">
+        <span class="cfg-sub">host.db、审计等宿主数据</span>
+      </label>
+      <label class="cfg-field">应用目录
+        <input id="cfg-apps-dir" autocapitalize="none" spellcheck="false">
+        <span class="cfg-sub">应用产物目录（每应用一个子目录）</span>
+      </label>
+    </div>
+    <p class="hint">存储路径需为绝对路径，保存后需重启生效；改路径不会搬移现有数据，迁移请先退出程序再移动目录。</p>
+    <p class="hint" id="cfg-file-hint"></p>
+    <div class="bar">
+      <button id="cfg-save">保存</button>
+      <button id="cfg-save-restart" class="danger" hidden>保存并重启</button>
+      <span class="muted" id="cfg-msg" aria-live="polite"></span>
+    </div>
+  </section>
+
   <!-- 系统 -->
   <section id="view-system" class="view" hidden>
     <div class="table-wrap">
       <table class="kv-table" style="padding: 6px;"><tbody id="system-facts"><tr><td>加载中…</td></tr></tbody></table>
     </div>
+    <h2>访问密码</h2>
+    <div class="bar">
+      <input type="password" id="pw-old" placeholder="当前密码" autocomplete="current-password" hidden>
+      <input type="password" id="pw-new" placeholder="新密码（至少 8 字符）" autocomplete="new-password">
+      <button id="pw-change">设置密码</button>
+      <button id="pw-logout" hidden>退出登录</button>
+      <span class="muted" id="pw-state"></span>
+    </div>
+    <p class="hint">密码保护管理台与 admin 接口，应用页面不受影响（链接可直接分享）。修改密码后所有已登录会话失效。</p>
     <h2>宿主升级 <span class="count" id="host-version"></span></h2>
     <div class="bar">
       <button id="update-check">检查更新</button>
@@ -401,8 +517,19 @@
       <button id="update-install" hidden>下载并安装</button>
       <button id="host-restart" hidden class="danger" title="重启宿主进程以切换新版本">重启宿主</button>
     </div>
-    <p class="hint">系统页只读；配置是文件，不在界面改。</p>
   </section>
+
+  <!-- 访问密码门（已设密码且会话失效时覆盖全页） -->
+  <div id="auth-gate" hidden>
+    <form id="auth-form" class="auth-card">
+      <h2 id="auth-title">管理台登录</h2>
+      <p id="auth-hint" class="muted"></p>
+      <input type="password" id="auth-password" placeholder="访问密码" autocomplete="current-password">
+      <input type="password" id="auth-password2" placeholder="再输一遍（确认）" autocomplete="new-password" hidden>
+      <button type="submit" id="auth-submit">登录</button>
+      <p id="auth-msg" class="muted" aria-live="polite"></p>
+    </form>
+  </div>
 </main>
 
 <script>
@@ -417,29 +544,17 @@ function esc(s) {
   })[c]);
 }
 
-function adminHeaders(extra) {
-  const h = Object.assign({}, extra || {});
-  const token = sessionStorage.getItem("pegboard-admin-token");
-  if (token) h["Authorization"] = "Bearer " + token;
-  return h;
-}
-
 async function j(url, opts) {
   const init = Object.assign({}, opts || {});
-  init.headers = adminHeaders(init.headers);
+  // JSON 字符串体自动补 Content-Type（axum 的 Json 提取器要求该头）；
+  // FormData（上传安装包）不加，浏览器自带 multipart boundary
+  if (typeof init.body === "string") {
+    init.headers = Object.assign({ "Content-Type": "application/json" }, init.headers || {});
+  }
+  // 管理鉴权走会话 cookie：同源 fetch 自动携带，无需附加头
   let r = await fetch(url, init);
-  // 管理鉴权开启时：提示输入 token 并重试一次
-  if (r.status === 401) {
-    let body401 = {};
-    try { body401 = await r.json(); } catch (_) {}
-    if ((body401.error || {}).code === "TOKEN_INVALID") {
-      const token = prompt("宿主已启用管理鉴权，请输入管理 token：");
-      if (token) {
-        sessionStorage.setItem("pegboard-admin-token", token);
-        init.headers = adminHeaders(init.headers);
-        r = await fetch(url, init);
-      }
-    }
+  if (r.status === 401 && typeof onAuthRequired === "function") {
+    onAuthRequired();
   }
   if (r.ok) return r.status === 204 ? null : r.json();
   let body = {};
@@ -503,7 +618,7 @@ const STATE_CLASS = {
   not_installed: "dim", invalid: "err", missing: "warn",
 };
 const OUTCOME_CLASS = { Ok: "ok", Denied: "warn", Error: "err" };
-const VIEW_TITLES = { wall: "应用墙", trust: "信任中心", storage: "存储", audit: "审计", system: "系统" };
+const VIEW_TITLES = { wall: "应用墙", trust: "信任中心", storage: "存储", audit: "审计", config: "配置", system: "系统" };
 
 let routeCtx = { view: "wall", query: {} };
 
@@ -529,7 +644,7 @@ function parseHash() {
     const tab = ["overview", "activity", "denied", "consistency"].includes(seg[2]) ? seg[2] : "overview";
     return { view: "app", id, tab, query };
   }
-  if (["trust", "storage", "audit", "system"].includes(seg[0])) return { view: seg[0], query };
+  if (["trust", "storage", "audit", "config", "system"].includes(seg[0])) return { view: seg[0], query };
   return { view: "wall", query };
 }
 
@@ -539,7 +654,7 @@ function route() {
   const title = r.view === "app" ? r.id : VIEW_TITLES[r.view];
   $("view-title").textContent = title;
   document.title = title + " · Pegboard 管理台";
-  for (const v of ["wall", "app", "trust", "storage", "audit", "system"]) {
+  for (const v of ["wall", "app", "trust", "storage", "audit", "config", "system"]) {
     $("view-" + v).hidden = v !== r.view;
   }
   document.querySelectorAll(".nav a").forEach((a) => {
@@ -554,6 +669,7 @@ function route() {
     case "app": loadAppDetail(r.id, r.tab); break;
     case "trust": loadTrust(); break;
     case "storage": loadStorage(); break;
+    case "config": loadConfig(); break;
     case "audit":
       initAuditFilters(r.query);
       auditLogs.reset();
@@ -570,6 +686,7 @@ function loadCurrentView() {
     case "app": return r.tab === "overview" ? loadAppDetail(r.id, r.tab) : Promise.resolve();
     case "trust": return loadTrust();
     case "storage": return loadStorage();
+    case "config": return loadConfig();
     case "audit": return auditLogs.load();
     case "system": return pollUpdateOnce();
   }
@@ -1353,13 +1470,12 @@ async function loadStatus() {
 
 function renderSystem(s) {
   $("server-info").textContent =
-    "v" + s.version + " · " + s.mode + " · " + s.listen +
+    "v" + s.version + " · " + s.exposure + " · " + s.listen +
     " · 运行 " + fmtUptime(s.uptime_secs) +
     (s.audit_dropped ? " · 审计丢弃 " + s.audit_dropped : "");
   const rows = [
     ["版本", "v" + s.version],
-    ["模式", s.mode === "lan" ? "lan（局域网）" : "local（本机）"],
-    ["身份来源", s.identity],
+    ["访问范围", s.exposure === "lan" ? "lan（局域网可达）" : "local（仅本机）"],
     ["监听地址", s.listen],
     ["数据目录", s.data_root],
     ["应用目录", s.apps_dir],
@@ -1386,7 +1502,7 @@ function renderUpdatePhase(v) {
   const phase = v.phase || {};
   switch (phase.state) {
     case "idle":
-      msg.textContent = "更新源: " + (v.source || "未配置");
+      msg.textContent = "尚未检查，点击「检查更新」手动检测新版本";
       break;
     case "checking":
       msg.textContent = "检查更新中…";
@@ -1483,11 +1599,230 @@ setInterval(() => {
   loadCurrentView();
 }, 10_000);
 
+// ---------- 在线配置 ----------
+
+let configCache = null;
+
+async function loadConfig() {
+  try {
+    configCache = await j("/api/admin/config");
+    renderConfig(configCache);
+  } catch (e) {
+    $("cfg-msg").innerHTML = '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
+  }
+}
+
+const MIB = 1048576, GIB = 1073741824;
+const toMib = (b) => Math.round((b / MIB) * 100) / 100;
+const toGib = (b) => Math.round((b / GIB) * 100) / 100;
+
+function renderConfig(c) {
+  $("cfg-listen").value = c.listen;
+  $("cfg-exposure").textContent = c.lan_exposed ? "当前局域网可达" : "当前仅本机可访问";
+  $("cfg-kv-value").value = toMib(c.limits.kv_value_bytes);
+  $("cfg-kv-total").value = toMib(c.limits.kv_total_bytes);
+  $("cfg-file-bytes").value = toMib(c.limits.file_bytes);
+  $("cfg-file-total").value = toGib(c.limits.file_total_bytes);
+  $("cfg-net-rps").value = c.limits.net_rps;
+  $("cfg-sign-ttl").value = c.limits.sign_ttl_max;
+  renderBytesHint(c.limits);
+  $("cfg-data-root").value = c.storage.data_root;
+  $("cfg-apps-dir").value = c.storage.apps_dir;
+  $("cfg-file-hint").textContent =
+    "配置文件：" + (c.config_path || "无（全默认启动，在线修改需先创建配置文件）");
+}
+
+function collectConfigUpdate() {
+  const body = {};
+  const listen = $("cfg-listen").value.trim();
+  if (configCache && listen !== configCache.listen) body.listen = listen;
+  const limits = {
+    kv_value_bytes: Math.round(Number($("cfg-kv-value").value) * MIB),
+    kv_total_bytes: Math.round(Number($("cfg-kv-total").value) * MIB),
+    file_bytes: Math.round(Number($("cfg-file-bytes").value) * MIB),
+    file_total_bytes: Math.round(Number($("cfg-file-total").value) * GIB),
+    net_rps: Number($("cfg-net-rps").value),
+    sign_ttl_max: Number($("cfg-sign-ttl").value),
+  };
+  if (!configCache || JSON.stringify(limits) !== JSON.stringify(configCache.limits)) body.limits = limits;
+  const dataRoot = $("cfg-data-root").value.trim();
+  const appsDir = $("cfg-apps-dir").value.trim();
+  if (!configCache || dataRoot !== configCache.storage.data_root || appsDir !== configCache.storage.apps_dir) {
+    body.storage = { data_root: dataRoot, apps_dir: appsDir };
+  }
+  return body;
+}
+
+async function saveConfig(withRestart) {
+  const msg = $("cfg-msg");
+  try {
+    const body = collectConfigUpdate();
+    if (!Object.keys(body).length) { msg.textContent = "没有变更"; return; }
+    const r = await j("/api/admin/config", { method: "PUT", body: JSON.stringify(body) });
+    const label = { listen: "监听地址", limits: "限额", storage: "存储路径" };
+    const parts = (r.applied || []).map((x) => label[x] || x);
+    if (r.restart_required) {
+      msg.textContent = parts.join("、") + " 已保存，重启后生效";
+      if (withRestart) {
+        msg.textContent = "已保存，重启宿主进程…";
+        await j("/api/admin/host/restart", { method: "POST" });
+        msg.textContent = "重启中…页面会自动重连";
+      }
+    } else {
+      msg.textContent = parts.join("、") + " 已保存并生效";
+    }
+    // 存储路径不换内存快照（目录随进程打开），GET 仍是旧值——用已保存值
+    // 覆盖回显，避免表单被重置成未保存状态
+    const fresh = await j("/api/admin/config");
+    if ((r.applied || []).includes("storage") && body.storage) Object.assign(fresh.storage, body.storage);
+    configCache = fresh;
+    renderConfig(fresh);
+  } catch (e) {
+    msg.innerHTML = '<span class="pill err">' + esc(e.code || "ERROR") + "</span> " + esc(e.message || e);
+  }
+}
+
+$("cfg-save").addEventListener("click", () => saveConfig(false));
+$("cfg-save-restart").addEventListener("click", () => {
+  if (confirm("保存并重启宿主进程？短暂中断后自动恢复（页面会自动重连）。")) saveConfig(true);
+});
+// 监听地址或存储路径有变更时才亮出「保存并重启」
+function cfgRestartDirty() {
+  if (!configCache) return false;
+  if ($("cfg-listen").value.trim() !== configCache.listen) return true;
+  return $("cfg-data-root").value.trim() !== configCache.storage.data_root
+      || $("cfg-apps-dir").value.trim() !== configCache.storage.apps_dir;
+}
+for (const id of ["cfg-listen", "cfg-data-root", "cfg-apps-dir"]) {
+  $(id).addEventListener("input", () => {
+    $("cfg-save-restart").hidden = !cfgRestartDirty();
+  });
+}
+
+// 输入时实时显示将要保存的精确字节数
+function renderBytesHint(l) {
+  $("cfg-bytes-hint").textContent =
+    "当前保存值：KV 单值 " + l.kv_value_bytes + " B · KV 总量 " + l.kv_total_bytes
+    + " B · 单文件 " + l.file_bytes + " B · 文件总量 " + l.file_total_bytes + " B";
+}
+for (const id of ["cfg-kv-value", "cfg-kv-total", "cfg-file-bytes", "cfg-file-total",
+                  "cfg-net-rps", "cfg-sign-ttl"]) {
+  $(id).addEventListener("input", () => {
+    if (!configCache) return;
+    const merged = Object.assign({}, configCache.limits, collectConfigUpdate().limits || {});
+    renderBytesHint(merged);
+  });
+}
+
+// ---------- 访问密码 ----------
+
+let authGateVisible = false;
+
+function showAuthGate() {
+  authGateVisible = true;
+  $("auth-gate").hidden = false;
+}
+
+function hideAuthGate() {
+  authGateVisible = false;
+  $("auth-gate").hidden = true;
+  $("auth-password").value = "";
+  $("auth-password2").value = "";
+  $("auth-msg").textContent = "";
+}
+
+// j() 收到 401 时回调：查询状态决定渲染登录还是首次设密
+function onAuthRequired() {
+  if (authGateVisible) return;
+  j("/api/admin/auth/state")
+    .then((s) => {
+      authGateMode(s.has_password);
+      showAuthGate();
+    })
+    .catch(() => {});
+}
+
+function authGateMode(hasPassword) {
+  if (hasPassword) {
+    $("auth-title").textContent = "管理台登录";
+    $("auth-hint").textContent = "本管理台已设置访问密码。";
+    $("auth-submit").textContent = "登录";
+    $("auth-password2").hidden = true;
+  } else {
+    $("auth-title").textContent = "设置访问密码";
+    $("auth-hint").textContent = "首次使用：设置管理台访问密码（至少 8 字符）。";
+    $("auth-submit").textContent = "设置并登录";
+    $("auth-password2").hidden = false;
+  }
+}
+
+$("auth-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const pw = $("auth-password").value;
+  const msg = $("auth-msg");
+  try {
+    if (pw.length < 8) throw new Error("密码长度须至少 8 字符");
+    if ($("auth-password2").hidden) {
+      await j("/api/admin/auth/login", { method: "POST", body: JSON.stringify({ password: pw }) });
+    } else {
+      if (pw !== $("auth-password2").value) throw new Error("两次输入不一致");
+      await j("/api/admin/auth/setup", { method: "POST", body: JSON.stringify({ password: pw }) });
+    }
+    hideAuthGate();
+    loadStatus();
+    loadCurrentView();
+    loadPwCard();
+  } catch (err) {
+    msg.textContent = err.message || "操作失败";
+  }
+});
+
+// 系统页的访问密码卡片
+async function loadPwCard() {
+  try {
+    const s = await j("/api/admin/auth/state");
+    $("pw-old").hidden = !s.has_password;
+    $("pw-change").textContent = s.has_password ? "修改密码" : "设置密码";
+    $("pw-logout").hidden = !s.has_password;
+    $("pw-state").textContent = s.has_password
+      ? (s.lan_exposed ? "已设置 · 局域网开放" : "已设置")
+      : (s.lan_exposed ? "未设置 · 局域网开放，建议立即设置" : "未设置");
+  } catch (_) {
+    $("pw-state").textContent = "";
+  }
+}
+
+$("pw-change").addEventListener("click", async () => {
+  const msg = $("pw-msg") || $("pw-state");
+  const nw = $("pw-new").value;
+  try {
+    if (nw.length < 8) throw new Error("新密码长度须至少 8 字符");
+    const old = $("pw-old").hidden ? "" : $("pw-old").value;
+    const body = $("pw-old").hidden
+      ? { password: nw }
+      : { old: old, new: nw };
+    await j($("pw-old").hidden ? "/api/admin/auth/setup" : "/api/admin/auth/change",
+      { method: "POST", body: JSON.stringify(body) });
+    $("pw-old").value = ""; $("pw-new").value = "";
+    $("pw-state").textContent = "已更新";
+    loadPwCard();
+  } catch (e) {
+    $("pw-state").textContent = e.message || "操作失败";
+  }
+});
+
+$("pw-logout").addEventListener("click", async () => {
+  try { await j("/api/admin/auth/logout", { method: "POST" }); } catch (_) {}
+  onAuthRequired();
+});
+
 // ---------- 启动 ----------
 
 window.addEventListener("hashchange", route);
-route();
-loadStatus();
+// 先探鉴权：已设密码且会话失效 → 弹访问密码门，通过后再拉数据
+j("/api/admin/status")
+  .then(() => { route(); loadStatus(); loadPwCard(); })
+  .catch(() => {});
 </script>
 </body>
 </html>

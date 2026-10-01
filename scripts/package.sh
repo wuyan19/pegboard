@@ -29,10 +29,8 @@ mkdir -p "${OUT}"
 cp "${BIN}" "${OUT}/pegboard"
 chmod +x "${OUT}/pegboard"
 
-# 应用目录（示例与用户应用）
-cp -R apps "${OUT}/apps"
-
-# 默认配置（拷贝示例）
+# 默认配置（拷贝示例）。apps/ 不随包分发（仓库里只是示例应用），
+# 首启时宿主会按配置自动创建空目录（cli.rs resolve_config）。
 cp config.example.toml "${OUT}/config.toml"
 
 echo "==> 校验产物可运行"
@@ -83,8 +81,6 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 </plist>
 PLIST
 
-  # 应用随包：.app 与裸二进制共用一份 apps/（相对 cwd 解析，见 config 说明）
-  cp -R apps "${APP}/Contents/MacOS/apps"
   cp config.example.toml "${APP}/Contents/MacOS/config.toml"
 
   # ad-hoc 签名：本机双击运行即可（对外分发需 Developer ID + 公证）

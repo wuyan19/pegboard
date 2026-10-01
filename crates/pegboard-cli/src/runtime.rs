@@ -31,6 +31,7 @@ pub struct Runtime {
 /// 按依赖顺序构造所有组件。任一步失败即退出，错误信息含具体组件。
 pub async fn build(
     config: Config,
+    config_path: Option<std::path::PathBuf>,
     control: Arc<dyn ProcessControl>,
 ) -> Result<Runtime, Box<dyn std::error::Error>> {
     // 数据目录：data_root 下 logs / tmp / apps_data
@@ -93,14 +94,7 @@ pub async fn build(
     .map_err(|e| format!("启动审计器失败: {e}"))?;
     let audit_handle = auditor.handle();
 
-    let guard = Arc::new(pegboard_core::guard::Guard::with_injected(
-        config
-            .identity
-            .injected_headers()
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect(),
-    ));
+    let guard = Arc::new(pegboard_core::guard::Guard::new());
     let proxy = pegboard_core::proxy::Proxy::new(
         Arc::clone(&guard),
         pegboard_core::proxy::ProxyConfig::default(),
@@ -108,18 +102,20 @@ pub async fn build(
     .map_err(|e| format!("构造代理器失败: {e}"))?;
     let signer = Arc::new(pegboard_core::files::Signer::new(Arc::clone(&host_db)));
 
-    // 管理鉴权：设置了 PEGBOARD_ADMIN_TOKEN 即启用（lan 部署建议配置；敏感项走环境变量）
-    let admin_token = match std::env::var("PEGBOARD_ADMIN_TOKEN") {
-        Ok(t) if !t.trim().is_empty() => {
-            if t.trim().len() < 16 {
-                return Err("PEGBOARD_ADMIN_TOKEN 长度须至少 16 字符".into());
-            }
-            Some(t.trim().to_owned())
+    // 访问分层告警：局域网开放（listen 非环回）且未设管理密码 → admin 端点无门
+    if config.server.is_lan_exposed() {
+        match host_db.get_password_hash() {
+            Ok(None) => tracing::warn!(
+                "listen 绑定非环回地址且未设置访问密码：/api/admin/* 对局域网无鉴权，\
+                 请打开管理页设置访问密码"
+            ),
+            Ok(Some(_)) => {}
+            Err(e) => tracing::warn!(error = %e, "读取管理密码状态失败"),
         }
-        _ => None,
-    };
+    }
+
     let state = Arc::new(AppState {
-        identity: pegboard_core::identity::Identity::new(&config.identity),
+        identity: pegboard_core::identity::Identity::new(),
         guard,
         stores: pegboard_core::store::StoreManager::new(data_root.join("apps_data"), config.limits),
         files: pegboard_core::files::FilesManager::new(
@@ -129,15 +125,14 @@ pub async fn build(
         signer: Arc::clone(&signer),
         host_db: Arc::clone(&host_db),
         started: std::time::Instant::now(),
-        admin_token,
         disabled: RwLock::new(disabled),
         proxy: Arc::new(proxy),
-        config: config.clone(),
+        config: RwLock::new(Arc::new(config.clone())),
+        config_path,
         apps: RwLock::new(registry),
         auditor: audit_handle.clone(),
         control,
         update: Arc::new(pegboard_server::host::update::Updater::new(
-            &config.update.manifest_url,
             data_root.join("tmp"),
         )),
     });
@@ -153,18 +148,17 @@ pub async fn build(
     })
 }
 
-/// 绑定监听。重启子进程（process::RESTART_CHILD_ENV=1）带重试窗口：
-/// 旧进程优雅退出需先释放监听，端口被占时按固定间隔重试。
+/// 绑定监听。绑定失败不致命：记警告后回退 `127.0.0.1:0`（OS 分配临时端口），
+/// 服务照常可用——托盘「打开管理页」读实际地址，临时端口天然兼容。
+/// 常见原因：端口被占 / 已有实例在运行。重启子进程（process::RESTART_CHILD_ENV=1）
+/// 先按固定间隔重试（等旧进程释放监听），重试耗尽同样回退，避免新旧进程双亡。
 async fn bind_listener(
     addr: std::net::SocketAddr,
 ) -> Result<tokio::net::TcpListener, Box<dyn std::error::Error>> {
-    if std::env::var_os(crate::process::RESTART_CHILD_ENV).is_none() {
-        return tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(|e| format!("绑定 {addr} 失败: {e}").into());
-    }
+    let retry = std::env::var_os(crate::process::RESTART_CHILD_ENV).is_some();
+    let attempts = if retry { RESTART_BIND_RETRIES + 1 } else { 1 };
     let mut last_err = None;
-    for attempt in 0..=RESTART_BIND_RETRIES {
+    for attempt in 0..attempts {
         match tokio::net::TcpListener::bind(addr).await {
             Ok(l) => {
                 if attempt > 0 {
@@ -172,22 +166,27 @@ async fn bind_listener(
                 }
                 return Ok(l);
             }
-            Err(e) if attempt < RESTART_BIND_RETRIES => {
+            Err(e) if attempt + 1 < attempts => {
                 last_err = Some(e);
                 tokio::time::sleep(RESTART_BIND_WAIT).await;
             }
             Err(e) => {
-                return Err(
-                    format!("绑定 {addr} 失败（重试 {RESTART_BIND_RETRIES} 次后）: {e}").into(),
-                )
+                last_err = Some(e);
             }
         }
     }
-    Err(format!(
-        "绑定 {addr} 失败: {}",
-        last_err.map(|e| e.to_string()).unwrap_or_default()
-    )
-    .into())
+    let err = last_err.unwrap_or_else(|| std::io::Error::other("bind failed"));
+    tracing::warn!(
+        %addr,
+        error = %err,
+        "绑定配置地址失败（端口被占或已有实例在运行？），回退到 127.0.0.1 临时端口"
+    );
+    let fallback = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("回退绑定 127.0.0.1:0 失败: {e}"))?;
+    let actual = fallback.local_addr()?;
+    tracing::warn!(actual = %actual, "已回退到临时端口");
+    Ok(fallback)
 }
 
 /// 启动 HTTP 服务，直至关闭信号或宿主控制通知；随后排空审计队列并置位
@@ -280,5 +279,32 @@ async fn drain_server(
             server_task.abort();
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bind_falls_back_to_ephemeral_port_when_occupied() {
+        // 占住一个端口，再以同一地址调用 bind_listener → 应回退到 127.0.0.1 临时端口
+        let occupier = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let taken = occupier.local_addr().expect("addr");
+        let listener = bind_listener(taken).await.expect("fallback bind");
+        let actual = listener.local_addr().expect("actual");
+        assert_ne!(actual.port(), taken.port(), "应回退到 OS 分配的临时端口");
+        assert!(actual.ip().is_loopback());
+    }
+
+    #[tokio::test]
+    async fn bind_succeeds_normally() {
+        // 空闲端口（0）直接命中配置地址，不触发回退
+        let listener = bind_listener("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        assert!(listener.local_addr().expect("addr").port() > 0);
     }
 }

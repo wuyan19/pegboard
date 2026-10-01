@@ -57,7 +57,10 @@ impl ProcessControl for TrayControl {
 /// 托盘模式编排：主线程事件循环 + 子线程 tokio 服务。正常情况下本函数
 /// 不返回（tao 在事件循环内部结束进程）；事件循环不可用（无 GUI 会话 panic）
 /// 由调用方 catch_unwind 降级为无头模式。
-pub fn serve_with_tray(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+pub fn serve_with_tray(
+    config: Config,
+    config_path: Option<std::path::PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoopBuilder::<TrayEvent>::with_user_event().build();
 
     #[cfg(target_os = "macos")]
@@ -68,7 +71,7 @@ pub fn serve_with_tray(config: Config) -> Result<(), Box<dyn std::error::Error>>
         let mut loop_mut = event_loop;
         loop_mut.set_activation_policy(ActivationPolicy::Accessory);
         loop_mut.set_dock_visibility(false);
-        run_event_loop(loop_mut, config)
+        run_event_loop(loop_mut, config, config_path)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -77,7 +80,11 @@ pub fn serve_with_tray(config: Config) -> Result<(), Box<dyn std::error::Error>>
 }
 
 #[allow(unused_assignments)] // tray_icon 持有于闭包内，赋值后不再读取是持有语义
-fn run_event_loop(event_loop: EventLoop<TrayEvent>, config: Config) -> ! {
+fn run_event_loop(
+    event_loop: EventLoop<TrayEvent>,
+    config: Config,
+    config_path: Option<std::path::PathBuf>,
+) -> ! {
     // 菜单「打开应用目录」用；config 本体 move 进服务线程
     let apps_dir = config.storage.apps_dir.clone();
     let notify = Arc::new(Notify::new());
@@ -106,7 +113,7 @@ fn run_event_loop(event_loop: EventLoop<TrayEvent>, config: Config) -> ! {
                     }
                 };
                 let result = rt.block_on(async move {
-                    let runtime = match crate::runtime::build(config, control).await {
+                    let runtime = match crate::runtime::build(config, config_path, control).await {
                         Ok(r) => r,
                         Err(e) => {
                             tracing::error!(error = %e, "宿主装配失败");

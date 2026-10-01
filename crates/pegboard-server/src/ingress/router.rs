@@ -22,9 +22,12 @@ use crate::ingress::ws_api;
 use crate::statics;
 
 /// 全进程共享状态。构造一次，注入所有 handler。
-/// 除 AppRegistry 外全部只读；注册表变更走显式接口。
+/// 除 AppRegistry / config 外全部只读；注册表变更走显式接口，
+/// config 由 admin 配置接口整快照替换（limits 热生效）。
 pub struct AppState {
-    pub config: Config,
+    pub config: RwLock<Arc<Config>>,
+    /// 配置文件路径（resolve_config 结果；None = 全默认启动，无文件可写回）。
+    pub config_path: Option<std::path::PathBuf>,
     pub apps: RwLock<AppRegistry>,
     pub auditor: AuditorHandle,
     pub identity: Identity,
@@ -37,8 +40,6 @@ pub struct AppState {
     pub host_db: Arc<HostDb>,
     /// 进程启动时刻（admin 状态页的 uptime）
     pub started: std::time::Instant,
-    /// 管理鉴权 token（env PEGBOARD_ADMIN_TOKEN；None = 不鉴权，v1 本地模式）
-    pub admin_token: Option<String>,
     /// 禁用应用集合（能力 API 对禁用应用返回 APP_NOT_FOUND；静态仍可访问）
     pub disabled: RwLock<HashSet<String>>,
     /// 进程控制（重启宿主）；实现属进程层（cli），单测用 NoControl
@@ -48,6 +49,14 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// 当前生效配置快照（admin 在线修改后整体替换，读侧取快照保证一致）。
+    pub fn config(&self) -> Arc<Config> {
+        self.config
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
     /// 能力路径应用解析：禁用即 APP_NOT_FOUND（admin 骨架语义）。
     pub fn app_meta(&self, id: &str) -> Result<Arc<AppMeta>, ApiError> {
         self.app_meta_static(id)?;
@@ -83,10 +92,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(proxy_api::routes())
         .merge(files_api::routes())
         .merge(ws_api::routes())
+        // auth 端点豁免鉴权（登录/设密本身不能要凭证）
+        .merge(admin::auth_routes())
         .merge(
             admin::api_routes().route_layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&state),
-                crate::admin::api::auth_middleware,
+                crate::admin::auth::auth_middleware,
             )),
         )
         .merge(admin::page_routes())
