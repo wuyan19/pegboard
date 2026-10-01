@@ -75,7 +75,7 @@ pub fn serve_with_tray(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        run_event_loop(event_loop, config)
+        run_event_loop(event_loop, config, config_path)
     }
 }
 
